@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, date, time as dtime, timezone
 from flask import Flask, jsonify, request, Response
 import upstox_client
 import persist; persist.restore_early()   # cloud only: restore saved data from the private data repo before anything reads it
+import autolab
 
 IST = timezone(timedelta(hours=5, minutes=30))
 SHIFT = 19800                                   # chart shows IST by shifting epoch seconds
@@ -195,7 +196,7 @@ def make_idle():
 def pos_legs(p):
     src = p if p.get("status") != "WAITING" else p.get("plan", {}); return (src["short"]["key"], src["long"]["key"])
 def feed_keys():
-    ks = [UNDERLYING_KEY, FUT_KEY, *EQ_KEYS.values(), *CUR_LEGS]
+    ks = [UNDERLYING_KEY, FUT_KEY, *EQ_KEYS.values(), *CUR_LEGS, *autolab.feed_keys()]
     for p in list(POSITIONS):
         if p.get("status") != "CLOSED" or p.get("pid") == SEL["pid"]: ks += list(pos_legs(p))
     return list(dict.fromkeys(k for k in ks if k))
@@ -1549,6 +1550,7 @@ def run_signals(nw, wall, qs):
     SIGDATA = dict(levels=SR_CACHE, items=items, verdict=v, detail=vd, log=list(SIG_LOG), updated=nw.strftime("%H:%M:%S"),
                    fut=dict(key=FUT_KEY, ltp=fq.get("ltp"), vol=fvol, age=(wall-fq["t"]) if fq.get("t") else None))
     if RECORD_TICKS: record_signals(wall, qs, items, v)
+    autolab.safe_hook(nw, wall, qs, items, v)      # Auto Lab (separate paper account): never raises
     _sr_safe_hook(nw, wall, qs, items, v, vd)      # signal research logger: read-only, never raises (placed before the code below that can raise)
     if SR_CACHE and SIG_NOTIFY and mo and sp:
         for kind, arr in (("resistance", SR_CACHE["resist"][:1]), ("support", SR_CACHE["support"][:1])):
@@ -2981,6 +2983,7 @@ def main():
     HDR = {"Accept": "application/json", "Authorization": f"Bearer {TOKEN}"}
     print("Token OK.")
     load_settings(); globals()["BACKTEST_MODE"] = False; load_opts(); ensure_ledger(); load_account()
+    autolab.init(globals()); autolab.register_routes(app); globals()["HTML"] = autolab.inject(HTML)
     try:
         TRIGGERS[:] = json.load(open(TRIG_PATH)) if os.path.exists(TRIG_PATH) else []
         for _t in TRIGGERS: _t["last"] = None
