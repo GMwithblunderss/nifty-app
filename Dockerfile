@@ -6,5 +6,5 @@ ENV PYTHONUNBUFFERED=1 TZ=Asia/Kolkata
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY nify_1.py persist.py ./
+COPY nify_1.py persist.py autolab.py ./
 CMD ["python", "nify_1.py"]
