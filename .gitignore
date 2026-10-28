@@ -1,0 +1,8 @@
+# never upload secrets or data to the code repo
+.env
+token.txt
+*.token
+spread_data/
+signal_research/
+__pycache__/
+*.pyc

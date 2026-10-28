@@ -1,0 +1,6 @@
+flask
+pandas
+numpy
+requests
+upstox-python-sdk
+psutil
