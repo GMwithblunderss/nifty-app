@@ -33,6 +33,7 @@ from flask import Flask, jsonify, request, Response
 import upstox_client
 import persist; persist.restore_early()   # cloud only: restore saved data from the private data repo before anything reads it
 import autolab
+import chainrec
 
 IST = timezone(timedelta(hours=5, minutes=30))
 SHIFT = 19800                                   # chart shows IST by shifting epoch seconds
@@ -196,7 +197,7 @@ def make_idle():
 def pos_legs(p):
     src = p if p.get("status") != "WAITING" else p.get("plan", {}); return (src["short"]["key"], src["long"]["key"])
 def feed_keys():
-    ks = [UNDERLYING_KEY, FUT_KEY, *EQ_KEYS.values(), *CUR_LEGS, *autolab.feed_keys()]
+    ks = [UNDERLYING_KEY, FUT_KEY, *EQ_KEYS.values(), *CUR_LEGS, *autolab.feed_keys(), *chainrec.feed_keys()]
     for p in list(POSITIONS):
         if p.get("status") != "CLOSED" or p.get("pid") == SEL["pid"]: ks += list(pos_legs(p))
     return list(dict.fromkeys(k for k in ks if k))
@@ -2967,7 +2968,7 @@ def _cloud_setup():
         if request.path == "/health": return None
         if hmac.compare_digest(request.headers.get("Authorization", "").encode("utf-8", "replace"), want): return None
         return Response("Login required", 401, {"WWW-Authenticate": 'Basic realm="Nifty dashboard"'})
-    app.add_url_rule("/health", "cloud_health", lambda: ("ok | " + persist.status_line(), 200, {"Content-Type": "text/plain"}))
+    app.add_url_rule("/health", "cloud_health", lambda: ("ok | " + persist.status_line() + " | " + chainrec.status_line(), 200, {"Content-Type": "text/plain"}))
 # <<< CLOUD HELPERS
 
 # ------------------------------------------------------------------ main
@@ -2983,7 +2984,7 @@ def main():
     HDR = {"Accept": "application/json", "Authorization": f"Bearer {TOKEN}"}
     print("Token OK.")
     load_settings(); globals()["BACKTEST_MODE"] = False; load_opts(); ensure_ledger(); load_account()
-    autolab.init(globals()); autolab.register_routes(app); globals()["HTML"] = autolab.inject(HTML)
+    chainrec.start(globals()); autolab.init(globals()); autolab.register_routes(app); globals()["HTML"] = autolab.inject(HTML)
     try:
         TRIGGERS[:] = json.load(open(TRIG_PATH)) if os.path.exists(TRIG_PATH) else []
         for _t in TRIGGERS: _t["last"] = None
