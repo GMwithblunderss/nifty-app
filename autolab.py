@@ -133,6 +133,11 @@ def init(globals_dict):
                 for k, d in SIGNALS: S["sigs"].setdefault(f"{k}:{d}", True)
         except Exception as e: _err("load state", e)
         RECENT[:] = _read_tail(_p("lab_trades.csv"), 300); SIGLOG[:] = _read_tail(_p("lab_signals.csv"), 150)
+        SHADOW[:] = [_shadow_slim(r) for r in _read_tail(_p("shadow_trades.csv"), 200000)]
+        S.setdefault("shadow_open", [])
+        keep = [x for x in S["shadow_open"] if x.get("day") == _now_s()[:10]]
+        for x in keep: x["resumed"] = True
+        S["shadow_open"] = keep
         PREV.clear(); PENDING.update(sid=None, t=0.0)
         READY = True
         pos = S.get("pos")
@@ -168,8 +173,14 @@ def _hook(nw, wall, qs, items, verdict):
             st, pst = states.get(key), PREV.get(key)
             if not first and mo and pst is not None and pst != st and st == d:
                 _fired(nw, wall, qs, key, d, pst, items, verdict)
+        if not first and mo:
+            for i in items:
+                key, st, pst = i["key"], i["state"], PREV.get(i["key"])
+                if pst is not None and pst != st and st in ("BULL", "BEAR"):
+                    _shadow_open(nw, wall, qs, i, pst, items, verdict)
         PREV.clear(); PREV.update(states)
         _manage(nw, wall, qs, mo)
+        _shadow_manage(nw, wall, qs, mo)
 
 def _states_str(items):
     return ";".join(f"{i['key']}={i['state']}" for i in items)
@@ -368,6 +379,110 @@ def _close(pos, reason, px, src, bid, ask, ltp, fut, spot, wall, nw, flags=""):
     _say(f"Auto Lab closed {pos['label']} ({reason}): net {'+' if net >= 0 else '-'}Rs{abs(net):,.0f}")
 
 
+
+# ----------------------------------------------------------------------------- SHADOW TRACKER (no money, every signal)
+# Every time ANY signal turns BULL or BEAR during market hours, a "shadow trade" is followed on Nifty futures with the lab's own
+# exit rule (+40 / -25 pts, 30 min, 15:20). No option, no money, no one-at-a-time limit: it simply records how each signal and
+# each filter idea would have done. Saved to spread_data/lab/shadow_trades.csv (synced with the rest of the data).
+SHADOW_COLS = ["shadow_id", "day", "signal_key", "signal_name", "direction", "fire_time_ist", "fire_ts", "minutes_since_open", "before_noon",
+               "in_lab_window", "entry_fut", "fut_vwap", "above_vwap", "vwap_dist_pts", "day_change_pct", "verdict_at_fire", "all_states_at_fire",
+               "exit_time_ist", "exit_reason", "hold_s", "exit_fut", "fut_move_signed", "fut_mfe", "fut_mae", "t_mfe_s", "t_mae_s",
+               "pts_after_cost", "won", "flags"]
+SHADOW_COST = 4.0
+SHADOW = []        # slim rows for the page summary
+
+def _shadow_slim(r):
+    return dict(day=r.get("day", ""), key=r.get("signal_key", ""), dir=r.get("direction", ""), t=(r.get("fire_time_ist") or "")[11:16],
+                vw=r.get("above_vwap", ""), pts=_f(r.get("pts_after_cost")), flags=r.get("flags", ""))
+
+def _fut_vwap():
+    try:
+        vl = (g("SR_LOCALS") or {}).get("vwap")
+        return _f(vl[2].get("vw")) if vl and vl[2] else None
+    except Exception:
+        return None
+
+def _shadow_open(nw, wall, qs, item, pst, items, verdict):
+    try:
+        if pst == "NA" and wall - g("START_T", wall) < RULES["warmup_s"]:
+            return                                           # the signal only re-appeared because the app restarted
+        hm = nw.hour * 60 + nw.minute
+        if hm >= _hm(RULES["force_exit"]):
+            return
+        fq = qs.get(g("FUT_KEY")) or {}
+        if not _fresh(fq, wall):
+            return
+        fut = float(fq["ltp"]); vw = _fut_vwap(); iq = qs.get(g("UNDERLYING_KEY")) or {}
+        chg = (iq["ltp"] / iq["cp"] - 1) * 100 if iq.get("ltp") and iq.get("cp") else None
+        S["shadow_seq"] = S.get("shadow_seq", 0) + 1
+        S["shadow_open"].append(dict(
+            id=f"S{nw:%Y%m%d}-{S['shadow_seq']:04d}", day=nw.strftime("%Y-%m-%d"), key=item["key"], name=item.get("name", item["key"]),
+            dir=item["state"], fire_time=_now_s(nw), fire_ts=wall, mso=hm - 555, noon=hm < 720,
+            win=_hm(RULES["entry_from"]) <= hm < _hm(RULES["entry_until"]), entry=fut, vwap=vw,
+            above=(None if vw is None else fut > vw), vdist=(None if vw is None else fut - vw), chg=chg, verdict=verdict,
+            states=_states_str(items), mfe=0.0, mae=0.0, tmfe=0.0, tmae=0.0, last=0.0, resumed=False))
+        _save()
+    except Exception as e:
+        _err("shadow open", e)
+
+def _shadow_manage(nw, wall, qs, mo):
+    op = S.get("shadow_open") or []
+    if not op:
+        return
+    fq = qs.get(g("FUT_KEY")) or {}
+    fresh = _fresh(fq, wall); done = []
+    for x in op:
+        sign = 1 if x["dir"] == "BULL" else -1; age = wall - x["fire_ts"]
+        if fresh:
+            mv = (float(fq["ltp"]) - x["entry"]) * sign; x["last"] = mv
+            if mv > x["mfe"]: x["mfe"], x["tmfe"] = mv, age
+            if mv < x["mae"]: x["mae"], x["tmae"] = mv, age
+        mv = x["last"]; reason = None
+        if fresh and mv >= RULES["target_pts"]: reason = "TARGET"
+        elif fresh and mv <= -RULES["stop_pts"]: reason = "STOP"
+        elif age >= RULES["max_hold_s"]: reason = "TIME_30M"
+        elif (not mo) or nw.hour * 60 + nw.minute >= _hm(RULES["force_exit"]): reason = "END_OF_DAY"
+        if reason:
+            done.append(x)
+            pts = mv - SHADOW_COST
+            row = dict(shadow_id=x["id"], day=x["day"], signal_key=x["key"], signal_name=x["name"], direction=x["dir"], fire_time_ist=x["fire_time"],
+                       fire_ts=_r(x["fire_ts"], 3), minutes_since_open=x["mso"], before_noon=int(x["noon"]), in_lab_window=int(x["win"]),
+                       entry_fut=_r(x["entry"]), fut_vwap=_r(x["vwap"]), above_vwap=("" if x["above"] is None else int(x["above"])),
+                       vwap_dist_pts=_r(x["vdist"]), day_change_pct=_r(x["chg"], 3), verdict_at_fire=x["verdict"], all_states_at_fire=x["states"],
+                       exit_time_ist=_now_s(nw), exit_reason=reason, hold_s=_r(age, 1),
+                       exit_fut=_r(float(fq["ltp"])) if fresh else None, fut_move_signed=_r(mv), fut_mfe=_r(x["mfe"]), fut_mae=_r(x["mae"]),
+                       t_mfe_s=_r(x["tmfe"], 1), t_mae_s=_r(x["tmae"], 1), pts_after_cost=_r(pts), won=int(pts > 0),
+                       flags=";".join(f for f in ("RESUMED_AFTER_RESTART" if x.get("resumed") else "", "NO_FRESH_PRICE_AT_EXIT" if not fresh else "") if f))
+            try: _append(_p("shadow_trades.csv"), SHADOW_COLS, row)
+            except Exception as e: _err("shadow log", e)
+            SHADOW.append(_shadow_slim({k: ("" if v is None else str(v)) for k, v in row.items()}))
+    if done:
+        S["shadow_open"] = [x for x in op if x not in done]
+        _save()
+
+SHADOW_VARIANTS = [("rvol BULL - all", "rvol", "BULL", None), ("rvol BULL - before 12:00", "rvol", "BULL", "am"),
+                   ("rvol BULL - before 12:00 + above VWAP", "rvol", "BULL", "am_vw"), ("rvol BULL - after 12:00", "rvol", "BULL", "pm")]
+
+def _shadow_summary():
+    today = _now_s()[:10]
+    def stat(rs):
+        v = [r["pts"] for r in rs if r["pts"] is not None]
+        t = [r["pts"] for r in rs if r["pts"] is not None and r["day"] == today]
+        return dict(n=len(v), won=sum(1 for x in v if x > 0), avg=_r(sum(v) / len(v), 1) if v else None, total=_r(sum(v), 0) if v else None,
+                    days=len({r["day"] for r in rs}), tn=len(t), tavg=_r(sum(t) / len(t), 1) if t else None)
+    def filt(rs, f):
+        if f == "am": return [r for r in rs if r["t"] < "12:00"]
+        if f == "pm": return [r for r in rs if r["t"] >= "12:00"]
+        if f == "am_vw": return [r for r in rs if r["t"] < "12:00" and r["vw"] == "1"]
+        return rs
+    out = []
+    for label, k, d, f in SHADOW_VARIANTS:
+        out.append(dict(label=label, group="Filter ideas", **stat(filt([r for r in SHADOW if r["key"] == k and r["dir"] == d], f))))
+    keys = sorted({(r["key"], r["dir"]) for r in SHADOW})
+    for k, d in keys:
+        out.append(dict(label=f"{k} {d}", group="Every signal", **stat([r for r in SHADOW if r["key"] == k and r["dir"] == d])))
+    return out
+
 # ----------------------------------------------------------------------------- what the page shows
 def snapshot():
     with LOCK:
@@ -388,7 +503,9 @@ def snapshot():
         tday = [t for t in trades if t["day"] == today]
         sigs = [dict(key=f"{k}:{d}", name=k, dir=d, on=bool(S["sigs"].get(f"{k}:{d}")), total=S["fired"].get(f"{k}:{d}", 0)) for k, d in SIGNALS]
         log = [dict(t=r["time_ist"][11:19], key=r["signal_key"], dir=r["direction"], action=r["action"], trade=r["trade_id"], fut=r["fut"]) for r in SIGLOG[-40:]]
-        return dict(ready=True, enabled=S["enabled"], sigs=sigs, rules=RULES, pos=p, trades=trades[::-1], today=tday[::-1], log=log[::-1], err=S.get("last_err"), pending=bool(PENDING["sid"]),
+        try: shadow = _shadow_summary()
+        except Exception as e: shadow = []; _err("shadow summary", e)
+        return dict(ready=True, shadow=shadow, shadow_open=len(S.get("shadow_open") or []), enabled=S["enabled"], sigs=sigs, rules=RULES, pos=p, trades=trades[::-1], today=tday[::-1], log=log[::-1], err=S.get("last_err"), pending=bool(PENDING["sid"]),
                     acct=dict(start=S["start"], equity=_r(eq), realized=_r(S["realized"]), today=_r(S["day_pnl"]), today_n=S["day_n"], n=n, wins=wins, losses=losses,
                               win_rate=_r(wins / n * 100, 1) if n else None, avg_win=_r(S["gross_win"] / wins) if wins else None, avg_loss=_r(S["gross_loss"] / losses) if losses else None,
                               pf=_r(S["gross_win"] / S["gross_loss"], 2) if S["gross_loss"] > 0 else None, expectancy=_r(S["realized"] / n) if n else None, maxdd=_r(S["maxdd"])))
@@ -412,9 +529,9 @@ def _command(j):
         if c == "reset":
             if S.get("pos") or PENDING["sid"]: return False, "close the open trade first"
             arc = _p("archive_" + datetime.now(IST).strftime("%Y%m%d_%H%M%S")); os.makedirs(arc, exist_ok=True)
-            for f in ("lab_trades.csv", "lab_signals.csv", "lab_marks.csv", "lab_state.json", "lab_events.log"):
+            for f in ("lab_trades.csv", "lab_signals.csv", "lab_marks.csv", "lab_state.json", "lab_events.log", "shadow_trades.csv"):
                 if os.path.exists(_p(f)): shutil.move(_p(f), os.path.join(arc, f))
-            keep = dict(enabled=S["enabled"], sigs=dict(S["sigs"])); S.clear(); S.update(_new_state()); S.update(keep); RECENT.clear(); SIGLOG.clear(); _save()
+            keep = dict(enabled=S["enabled"], sigs=dict(S["sigs"])); S.clear(); S.update(_new_state()); S.update(keep); RECENT.clear(); SIGLOG.clear(); SHADOW.clear(); _save()
             _log("account reset; old data archived to " + os.path.basename(arc)); return True, ""
     return False, "unknown command"
 
@@ -428,7 +545,7 @@ def register_routes(app):
         return (jsonify(ok=True) if ok else (jsonify(ok=False, error=msg), 400))
     @app.route("/api/lab/<name>.csv", endpoint="lab_csv")
     def _csv(name):
-        f = {"trades": "lab_trades.csv", "signals": "lab_signals.csv", "marks": "lab_marks.csv"}.get(name)
+        f = {"trades": "lab_trades.csv", "signals": "lab_signals.csv", "marks": "lab_marks.csv", "shadow": "shadow_trades.csv"}.get(name)
         if not f: return Response("not found", 404)
         data = open(_p(f), "rb").read() if READY and os.path.exists(_p(f)) else b""
         return Response(data, mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={f}"})
@@ -471,7 +588,11 @@ function labRender(d){
  const tt=rows=>rows.length?'<table><tr><th>In</th><th>Out</th><th>Signal</th><th>Option</th><th>Paid</th><th>Sold</th><th>Futures moved</th><th>Why it closed</th><th>Held</th><th>Net P&L</th></tr>'+rows.map(t=>'<tr><td>'+t.t_in+'</td><td>'+t.t_out+'</td><td>'+t.signal+' '+t.dir+'</td><td>'+t.label+'</td><td>'+f(t.entry)+'</td><td>'+f(t.exit)+'</td><td class="'+cls(+t.move)+'">'+f(t.move,1)+'</td><td>'+t.reason+'</td><td>'+dur(+t.hold)+'</td><td class="'+cls(+t.net)+'"><b>'+m(+t.net)+'</b></td></tr>').join('')+'</table>':'<p style="color:var(--mut)">None yet.</p>';
  h+='<h4>Today\'s trades</h4>'+tt(d.today)+'<h4>Recent trades (latest first)</h4>'+tt(d.trades);
  h+='<h4>Every time one of these signals fired (and what Auto Lab did)</h4>'+(d.log.length?'<table><tr><th>Time</th><th>Signal</th><th>What happened</th><th>Trade</th><th>Futures</th></tr>'+d.log.map(r=>'<tr><td>'+r.t+'</td><td>'+r.key+' '+r.dir+'</td><td style="text-align:left">'+r.action+'</td><td>'+(r.trade||'')+'</td><td>'+(r.fut||'')+'</td></tr>').join('')+'</table>':'<p style="color:var(--mut)">No signals yet today.</p>');
- h+='<p style="margin-top:14px"><a class="btn" href="/api/lab/trades.csv" download>Download trades.csv</a> <a class="btn" href="/api/lab/signals.csv" download>Download signals.csv</a> <a class="btn" href="/api/lab/marks.csv" download>Download marks.csv</a> <span style="color:var(--mut)">trades = one row per trade with full detail · signals = every firing and what was done · marks = price path every 5 s while a trade was open</span></p>';
+ if(d.shadow&&d.shadow.length){const row=r=>'<tr><td style="text-align:left">'+r.label+'</td><td>'+r.n+'</td><td>'+(r.n?Math.round(r.won/r.n*100)+'%':'–')+'</td><td class="'+cls(r.avg||0)+'">'+(r.avg==null?'–':(r.avg>0?'+':'')+r.avg)+'</td><td class="'+cls(r.total||0)+'">'+(r.total==null?'–':(r.total>0?'+':'')+r.total)+'</td><td>'+r.days+'</td><td class="'+cls(r.tavg||0)+'">'+(r.tn?r.tn+' · '+(r.tavg>0?'+':'')+r.tavg:'–')+'</td></tr>';
+  const hd='<tr><th style="text-align:left">Rule</th><th>Signals</th><th>Won</th><th>Avg pts</th><th>Total pts</th><th>Days</th><th>Today</th></tr>';
+  h+='<h4>Shadow tracker: how every signal and filter would do with the lab\'s exits (no money)</h4><div style="color:var(--mut);max-width:900px;margin-bottom:6px">Every time any signal turns on during market hours, Nifty futures are followed with the same +'+R.target_pts+' / −'+R.stop_pts+' pts, '+(R.max_hold_s/60)+' min exit. Points are after 4 pts of costs. No limit of one at a time, so it scores the signals themselves. '+(d.shadow_open?d.shadow_open+' being followed right now.':'')+'</div>';
+  h+='<table>'+hd+d.shadow.filter(r=>r.group==='Filter ideas').map(row).join('')+'</table><details><summary style="cursor:pointer;color:var(--mut);margin:6px 0">Every signal ('+d.shadow.filter(r=>r.group==='Every signal').length+')</summary><table>'+hd+d.shadow.filter(r=>r.group==='Every signal').sort((a,b)=>(b.avg||-99)-(a.avg||-99)).map(row).join('')+'</table></details>';}
+ h+='<p style="margin-top:14px"><a class="btn" href="/api/lab/shadow.csv" download>Download shadow.csv</a> <a class="btn" href="/api/lab/trades.csv" download>Download trades.csv</a> <a class="btn" href="/api/lab/signals.csv" download>Download signals.csv</a> <a class="btn" href="/api/lab/marks.csv" download>Download marks.csv</a> <span style="color:var(--mut)">trades = one row per trade with full detail · signals = every firing and what was done · marks = price path every 5 s while a trade was open</span></p>';
  h+='<p><button class="red" onclick="if(confirm(\'Archive ALL Auto Lab data and start a fresh account?\'))labCmd({cmd:\'reset\'})">Reset Auto Lab (old data is archived, not deleted)</button></p>';
  if(d.err)h+='<p style="color:#ef5350">Last error: '+d.err+'</p>';
  $('labBox').innerHTML=h;}
