@@ -27,6 +27,12 @@ ENABLED = bool(URL)
 TICKS_REPO = os.environ.get("TICKS_REPO", "").strip()
 TURL = os.environ.get("TICKS_REPO_URL", "").strip() or (f"https://x-access-token:{TOKEN}@github.com/{TICKS_REPO}.git" if TICKS_REPO and TOKEN else "")
 TCLONE = os.environ.get("TICKS_CLONE_DIR", "/tmp/nifty_ticks_repo")
+# preferred home for raw ticks: a private Hugging Face dataset (100 GB free). When HF_REPO + HF_TOKEN are set, ticks go there
+# instead of the GitHub ticks repo (same piece files, same folder layout: ticks/<day>/ticks_<day>_<stamp>.csv.gz).
+HF_REPO = os.environ.get("HF_REPO", "").strip()          # e.g. yourname/nifty-ticks
+HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
+HF_ON = bool(HF_REPO and HF_TOKEN)
+TICKS_ON = HF_ON or bool(TURL)
 TICKS_DIR = os.path.join(DATA_DIR, "ticks")
 SELF_URL = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")   # Render fills this in; the app pings itself so Render never puts it to sleep
 PING_EVERY = 240
@@ -41,7 +47,9 @@ _ENV = dict(os.environ, GIT_TERMINAL_PROMPT="0")
 
 def _clean(s):
     s = s or ""
-    return s.replace(TOKEN, "***") if TOKEN else s
+    if TOKEN: s = s.replace(TOKEN, "***")
+    if HF_TOKEN: s = s.replace(HF_TOKEN, "***")
+    return s
 
 
 def _now():
@@ -188,8 +196,10 @@ def _ensure_tclone():
 
 def push_ticks(reason="auto"):
     """Send only the ticks written since last time, as one small .csv.gz piece per day-file."""
-    if not TURL or not os.path.isdir(TICKS_DIR):
+    if not TICKS_ON or not os.path.isdir(TICKS_DIR):
         return False
+    if HF_ON:
+        return _push_ticks_hf(reason)
     with _TLOCK:
         try:
             if not _ensure_tclone():
@@ -244,6 +254,46 @@ def push_ticks(reason="auto"):
             return False
 
 
+def _push_ticks_hf(reason="auto"):
+    """Same pieces as the GitHub version, uploaded to the Hugging Face dataset in ONE commit (well under their hourly commit limit)."""
+    with _TLOCK:
+        try:
+            from huggingface_hub import HfApi, CommitOperationAdd
+            stamp, pending, ops, n = max(int(time.time() * 1000), _TSTAMP[0] + 1), {}, [], 0
+            _TSTAMP[0] = stamp
+            for name in sorted(os.listdir(TICKS_DIR)):
+                if not (name.startswith("ticks_") and name.endswith(".csv")):
+                    continue
+                path = os.path.join(TICKS_DIR, name)
+                size, off = os.path.getsize(path), _TOFF.get(name, 0)
+                if size < off:
+                    off = 0
+                if size == off:
+                    continue
+                with open(path, "rb") as fh:
+                    fh.seek(off)
+                    data = fh.read(size - off)
+                cut = data.rfind(b"\n")
+                if cut < 0:
+                    continue
+                day = name[len("ticks_"):-len(".csv")]
+                ops.append(CommitOperationAdd(path_in_repo=f"ticks/{day}/ticks_{day}_{stamp}.csv.gz",
+                                              path_or_fileobj=gzip.compress(data[:cut + 1], compresslevel=9)))
+                pending[name] = off + cut + 1
+            if not ops:
+                STATUS["ticks_ok"] = _now()
+                return True
+            HfApi(token=HF_TOKEN).create_commit(repo_id=HF_REPO, repo_type="dataset", operations=ops,
+                                                commit_message=f"ticks {datetime.now(IST):%Y-%m-%d %H:%M} IST ({reason})")
+            _TOFF.update(pending)             # only after the upload succeeded: a failed upload is simply retried next time
+            STATUS["tick_chunks"] += len(ops)
+            STATUS["ticks_ok"] = _now()
+            return True
+        except Exception as e:
+            _err(f"ticks upload to Hugging Face failed ({reason}): {e!r}")
+            return False
+
+
 def _self_ping():
     try:
         import requests
@@ -256,7 +306,7 @@ def _self_ping():
 def status_line():
     parts = []
     parts.append(f"data sync on, last ok {STATUS['last_ok'] or 'not yet'}, pushes {STATUS['pushes']}, restored {STATUS['restored']}" if ENABLED else "data sync off")
-    parts.append(f"ticks saved: {STATUS['tick_chunks']} pieces, last ok {STATUS['ticks_ok'] or 'not yet'}" if TURL else "ticks sync off")
+    parts.append(f"ticks saved{' to Hugging Face' if HF_ON else ''}: {STATUS['tick_chunks']} pieces, last ok {STATUS['ticks_ok'] or 'not yet'}" if TICKS_ON else "ticks sync off")
     parts.append(f"self-ping {STATUS['ping'] or 'not yet'}" if SELF_URL else "self-ping off")
     if STATUS["skipped_big"]:
         parts.append("TOO BIG TO SYNC: " + ", ".join(STATUS["skipped_big"]))
@@ -310,7 +360,7 @@ def start_background(on_stop=None):
                     last = time.time()
                     if ENABLED:
                         push_now("auto")
-                    if TURL:
+                    if TICKS_ON:
                         push_ticks("auto")
             except Exception as e:
                 _err(f"background loop: {e!r}")

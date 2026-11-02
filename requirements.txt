@@ -4,3 +4,4 @@ numpy
 requests
 upstox-python-sdk
 psutil
+huggingface_hub
