@@ -129,7 +129,7 @@ SIG_RF_VWX = 1                       # signal 14 reads signal 1 once a second
 EDITABLE.update({"SIG_RF_"+_k: int for _k in ("VWAP", "RVOL", "ORB", "STRUCT", "EMA", "OI", "CONTRIB", "DELTA", "SWEEP", "VWBAND", "ORBV", "DTREND", "DMA", "VWX")})
 EDITABLE.update({"SIG_VWAP_COMPRESS": float, "SIG_DT_BARS": int, "SIG_DT_MIN_RATIO": float, "SIG_DELTA_LOOKBACK": int, "SIG_DELTA_MIN_BARS": int, "SIG_DELTA_FRESH": int,
                  "SIG_SWEEP_LOOKBACK": int, "SIG_SWEEP_CLOSE_FRAC": float, "SIG_SWEEP_MIN_PTS": float, "SIG_SWEEP_MIN_DEPTH": float,
-                 "SIG_VWB_MIN_BARS": int, "SIG_VWB_MIN_SIGMA": float, "SIG_VWB_EXT": float, "SIG_VWB_SLOPE_MIN": float, "SIG_VWB_FLAT": float, "SIG_VWB_WINDOW": int})
+                 "SIG_VWB_MIN_BARS": int, "SIG_VWB_MIN_SIGMA": float, "SIG_VWB_EXT": float, "SIG_VWB_SLOPE_MIN": int, "SIG_VWB_FLAT": float, "SIG_VWB_WINDOW": int})
 os.makedirs(DATA_DIR, exist_ok=True)
 STATE_PATH, LEDGER = f"{DATA_DIR}/state.json", f"{DATA_DIR}/trades.csv"
 AUDIT, SESSION_PATH = f"{DATA_DIR}/events.log", f"{DATA_DIR}/session.json"
@@ -1311,13 +1311,13 @@ def sig_vwband():
     for m in ms:
         c = d[m]; v = c[4]; tp = (c[1]+c[2]+c[3])/3; vv += v; pv += tp*v; pv2 += tp*tp*v
         w = pv/vv; ser.append((w, math.sqrt(max(pv2/vv-w*w, 0.0)), c[1], c[2], c[3]))      # vwap, sigma, high, low, close
-    w, sd, _, _, cl = ser[-1]; n = SIG_VWB_SLOPE_MIN
+    w, sd, _, _, cl = ser[-1]; n = max(1, int(SIG_VWB_SLOPE_MIN))     # whole minutes (a saved setting can come back as 5.0)
     if sd < SIG_VWB_MIN_SIGMA: return "NA", f"VWAP bands too narrow to trade (sigma {sd:.1f} pts, needs {SIG_VWB_MIN_SIGMA:g}): too early or too quiet"
     if len(ser) < 2*n+1: return "NA", "building the VWAP slope…"
     s_now, s_prev = w-ser[-1-n][0], ser[-1-n][0]-ser[-1-2*n][0]
     up_turn = s_now >= -SIG_VWB_FLAT or s_now-s_prev >= SIG_VWB_FLAT       # VWAP flat/rising, or clearly stopped falling
     dn_turn = s_now <= SIG_VWB_FLAT or s_prev-s_now >= SIG_VWB_FLAT        # VWAP flat/falling, or clearly stopped rising
-    win = ser[-SIG_VWB_WINDOW:]
+    win = ser[-max(1, int(SIG_VWB_WINDOW)):]
     zl = min((x[4]-x[0])/x[1] for x in win); zh = max((x[4]-x[0])/x[1] for x in win)      # deepest / highest 1-min CLOSE in sigmas over the last few minutes (closes, not wicks)
     dipped, spiked = zl <= -SIG_VWB_EXT, zh >= SIG_VWB_EXT                 # needs a real flush/spike out to the outer band first
     if dipped and spiked:                                                   # both happened: only the clearly bigger move counts
