@@ -34,6 +34,7 @@ import upstox_client
 import persist; persist.restore_early()   # cloud only: restore saved data from the private data repo before anything reads it
 import autolab
 import chainrec
+import mobile
 
 IST = timezone(timedelta(hours=5, minutes=30))
 SHIFT = 19800                                   # chart shows IST by shifting epoch seconds
@@ -2984,7 +2985,7 @@ def main():
     HDR = {"Accept": "application/json", "Authorization": f"Bearer {TOKEN}"}
     print("Token OK.")
     load_settings(); globals()["BACKTEST_MODE"] = False; load_opts(); ensure_ledger(); load_account()
-    chainrec.start(globals()); autolab.init(globals()); autolab.register_routes(app); globals()["HTML"] = autolab.inject(HTML)
+    chainrec.start(globals()); autolab.init(globals()); autolab.register_routes(app); globals()["HTML"] = mobile.inject(autolab.inject(HTML))
     try:
         TRIGGERS[:] = json.load(open(TRIG_PATH)) if os.path.exists(TRIG_PATH) else []
         for _t in TRIGGERS: _t["last"] = None
