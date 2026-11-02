@@ -3,7 +3,7 @@ AUTO LAB - a separate paper-trading account that trades 1 lot by itself when cho
 
   * Own account, own P&L, own trades, own data folder (spread_data/lab/). Nothing here touches your other trades.
   * Never places a real order. Prices come from the live Upstox quotes the app already receives.
-  * What it trades (frozen rules, see RULES): when rvol BULL, orbv BULL or dtrend BEAR turns on, it BUYS one lot of an
+  * What it trades (frozen rules, see RULES): when rvol BULL, orbv BULL, dtrend BEAR or dtrend BULL (added 2 Nov 2026) turns on, it BUYS one lot of an
     option about 100 pts in the money (call on BULL, put on BEAR). It exits when Nifty futures move +40 pts (target) or
     -25 pts (stop) from entry, after 30 minutes, or at 15:20. One trade at a time, no daily limit.
   * Every signal that fires is logged (even when it is skipped, with the reason) so the data can be analysed later.
@@ -28,7 +28,7 @@ RULES = dict(
     itm_pts=100, min_dte=2,                                    # option strike distance; skip expiries closer than this many days
     safety_max_entries_per_day=40,                             # only a runaway-bug guard, not a trading limit
     fresh_quote_s=10.0, warmup_s=900, mark_every_s=5.0)
-SIGNALS = [("rvol", "BULL"), ("orbv", "BULL"), ("dtrend", "BEAR")]   # (signal key in the app, direction traded)
+SIGNALS = [("rvol", "BULL"), ("orbv", "BULL"), ("dtrend", "BEAR"), ("dtrend", "BULL")]   # dtrend BULL added 2026-11-02   # (signal key in the app, direction traded)
 
 TRADE_COLS = ["trade_id", "day", "signal_key", "signal_name", "direction", "fire_time_ist", "fire_ts", "fill_time_ist", "fill_latency_s",
               "expiry", "dte", "strike", "opt_type", "instrument_key", "qty", "lot_size",
