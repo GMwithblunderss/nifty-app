@@ -108,6 +108,7 @@ body.m .toast{max-width:none;border-radius:12px}
 body.m a.btn{margin:4px 6px 4px 0;padding:9px 12px;border-radius:10px}
 body.m #labBox [style*="max-width"]{max-width:100%!important}
 body.m #labBox .cards{grid-template-columns:1fr 1fr!important}
+body.m #vSwing{padding:10px 12px}body.m #vSwing .swbox{padding:10px}body.m #vSwing .swchart text{font-size:13px}
 
 /* ---- chart ---- */
 body.m .left{display:flex;flex-direction:column}
@@ -156,9 +157,10 @@ JS = r"""
   position:svg('<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 12h18"/>'),
   signals:svg('<path d="M2 12h3l3-7 4 14 3-7h7"/>'),
   lab:svg('<path d="M9 3h6"/><path d="M10 3v6L4.5 18.5A2 2 0 0 0 6.2 21h11.6a2 2 0 0 0 1.7-2.5L14 9V3"/><path d="M7 15h10"/>'),
+  swing:svg('<path d="M2 15c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3 2.5 3 5 3"/><path d="M2 20c2.5 0 2.5-3 5-3s2.5 3 5 3 2.5-3 5-3 2.5 3 5 3"/><path d="M12 3v6"/><path d="M9 6l3-3 3 3"/>'),
   more:svg('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'),
   bolt:svg('<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>')};
- const TABS=[['chart','Chart'],['position','Position'],['signals','Signals'],['lab','Auto Lab'],['more','More']];
+ const TABS=[['chart','Chart'],['position','Position'],['signals','Signals'],['lab','Auto Lab'],['swing','Swing'],['more','More']];
  const MORE=[['split','◫','Chart + panel'],['score','🏆','Signal scorecard'],['trades','📒','Trades & history'],['settings','⚙️','Settings']];
  const MAIN=TABS.map(t=>t[0]);
  let built=false, moved=[], made=[];
