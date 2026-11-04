@@ -24,7 +24,7 @@ try:
 except Exception:                       # pragma: no cover
     requests = None
 try:
-    import pandas as pd
+    import numpy as np, pandas as pd
 except Exception:                       # pragma: no cover
     pd = None
 
@@ -47,20 +47,37 @@ CFG = dict(
     eod_at="15:31", preview_at="15:36")
 
 ACCTS = [("acd", "A/C/D", {"ACD"}), ("c", "Option C", {"SW_M"}), ("cplus", "Option C+", {"SW_CP"}),
-         ("c_acd", "Option C + A/C/D", {"SW_M", "ACD"}), ("cplus_acd", "Option C+ + A/C/D", {"SW_CP", "ACD"})]
+         ("c_acd", "Option C + A/C/D", {"SW_M", "ACD"}), ("cplus_acd", "Option C+ + A/C/D", {"SW_CP", "ACD"}),
+         ("target8", "8% target", {"SW_CP", "ACD"}), ("core", "Core: C+ + L1 + Q", {"SW_CP", "L1", "Q"})]
+MIX_DEFAULT = 70   # % of the money that follows Core in the split view; the rest follows the 8% target account. Changeable on the page.
+# real-price backtest of each split, Oct 2024 - Oct 2026 (25 month-ends, never rebalanced): Rs 1L became / compound a month / median month / worst month / worst month-end fall / months up
+MIX_BT = {0: (453529, 6.2, 7.5, -26, -45, 17), 10: (425789, 6.0, 7.4, -24, -43, 17), 20: (398049, 5.7, 6.1, -23, -41, 17), 30: (370310, 5.4, 5.1, -22, -39, 16),
+          40: (342570, 5.0, 4.9, -20, -37, 16), 50: (314830, 4.7, 3.2, -19, -35, 15), 60: (287090, 4.3, 1.5, -17, -32, 15), 70: (259350, 3.9, 1.0, -18, -29, 14),
+          80: (231611, 3.4, 1.4, -20, -26, 15), 90: (203871, 2.9, 1.8, -21, -24, 15), 100: (176131, 2.3, 1.6, -23, -23, 15)}
+# accounts that size differently from CFG: fraction of the account put into each trade's premium (at least 1 lot while one lot is under `max`)
+ACCT_SIZE = {"target8": dict(swing_frac=0.15, swing_max=0.225, acd_frac=0.15, acd_max=0.225),
+             "core": dict(swing_frac=0.20, swing_max=0.30, acd_frac=0.20, acd_max=0.30)}
+Q_PER_LOT = 100000.0      # Q put spread: 1 lot per Rs 1 lakh of account, the full possible loss set aside
 ANAME = {a: n for a, n, _ in ACCTS}
 BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - shown beside the live numbers
     "acd": dict(month=3.6, period="Oct 2024 - Oct 2026, real option prices", dd=-20, note="about 7 trades a month; 43% winners; +9.1 pts a trade after costs"),
-    "c": dict(month=2.4, period="since 2013 (+2.9% a month since 2021)", dd=-47, note="about 20 trades a year; losing years 2016 and 2021"),
-    "cplus": dict(month=3.7, period="since 2013 (+4.4% a month since 2021)", dd=-63, note="weekly spreads for the 1-3 day signals; before 2019 weekly options did not exist"),
+    "c": dict(month=2.3, period="Feb 2010 - Oct 2026, real NSE prices", dd=-53, note="about 24 trades a year; 55% winners; losing years 2011, 2018, 2021 and 2025"),
+    "cplus": dict(month=3.4, period="Mar 2019 - Oct 2026, real NSE prices", dd=-42, note="weekly spreads for the 1-3 day signals; 56% winners; before 2019 weekly options did not exist"),
     "c_acd": dict(month=5.3, period="Oct 2024 - Oct 2026", dd=-37, note="the two halves often offset each other"),
     "cplus_acd": dict(month=8.1, period="Oct 2024 - Oct 2026", dd=-44, note="two good years; expect less over the long run"),
+    "target8": dict(month=6.2, period="Oct 2024 - Oct 2026, real prices (median month +6.1%)", dd=-48,
+                    note="Option C+ and A/C/D, 15% of the account in each trade. Real-price backtest: Rs 1L to Rs 4.5L in 25 months, 12 of 26 months at +8% or more, worst month -26%, lost 9% in 2025. Most of the gain came in 2026."),
+    "core": dict(month=3.5, period="Mar 2019 - Oct 2026, real NSE prices (median month +2.6%)", dd=-42,
+                 note="The recommended book: Option C+ + the 20-day trade (L1) + the put spread after a dip (Q), 20% of the account per swing trade, Q 1 lot per Rs 1L. Backtest: Rs 1L to Rs 23.1L, 69% of months up, never more than 2 losing months in a row, worst month -36% (Mar 2020)."),
 }
 RULE_NAME = {"P1": "Pullback in a strong trend", "P2": "Bounce in a correction", "P3": "Turn of the month",
+             "L1": "20-day trade: dip in a hot market", "Q": "Put spread after a dip",
              "A": "A: gap + opening drive", "C": "C: breakout after an NR7 day", "D": "D: wild-open fade"}
 TRADE_COLS = ["acct", "intent", "rule", "kind", "struct", "label", "lots", "qty", "entry_time", "exit_time", "entry_spot", "exit_spot",
               "entry_pts", "exit_pts", "gross", "fees", "net", "reason", "blocked", "days_held", "notes"]
 EQ_COLS = ["day", "acct", "book", "mtm", "cash", "interest", "open_positions"]
+FILL_COLS = ["t", "intent", "kind", "rule", "stage", "spot", "unit_pts", "legs"]          # every fill with the bid/ask/last of each leg (to compare with the research later)
+SIG_COLS = ["day", "source", "last_close", "ret10_rank", "close_pos", "rsi14", "below_52w_high", "gap", "P1", "P2", "P3", "L1", "Q", "entries"]
 
 G = {}; S = None; LOCK = threading.RLock(); READY = False; DIR = ""
 JOBS = queue.Queue(); DATA = dict(daily=[], daily_day=None, hol=set(), hol_ok=False, hol_day=None, fail=0.0, msg="")
@@ -112,6 +129,23 @@ def _err(where, e):
     if S is not None: S["last_err"] = f"{_ts()} {msg}"
     _event(msg, "error")
 
+def _fill_log(it, stage, quotes, px, spot):
+    try:
+        legs = [dict(strike=l.get("strike"), typ=l.get("typ"), expiry=l.get("expiry"), side=l.get("side"), bid=_r((q or {}).get("bid")), ask=_r((q or {}).get("ask")),
+                     ltp=_r((q or {}).get("ltp")), px=_r(p)) for l, q, p in zip(it["legs"], quotes, px)]
+        _append(_p("swing_fills.csv"), FILL_COLS, dict(t=_ts(), intent=it["id"], kind=it["kind"], rule=it["rule"], stage=stage, spot=_r(spot),
+                                                         unit_pts=it["unit_pts"] if stage == "entry" else it.get("exit_value"), legs=json.dumps(legs)))
+    except Exception as e: _err("fill log", e)
+
+def _signal_log(plan):
+    try:
+        fl = plan.get("flags") or {}; rules = {e["rule"]: e for e in plan["entries"]}
+        _append(_p("swing_signals.csv"), SIG_COLS, dict(day=plan["day"], source=plan["source"], last_close=fl.get("close"), ret10_rank=fl.get("ret10_rank"),
+                close_pos=fl.get("close_pos"), rsi14=fl.get("rsi14"), below_52w_high=fl.get("below_52w_high"), gap=fl.get("gap"),
+                **{r: ("skip: " + rules[r]["skip"] if rules[r].get("skip") else "yes") if r in rules else "" for r in ("P1", "P2", "P3", "L1", "Q")},
+                entries="; ".join(e["rule"] for e in plan["entries"]) + (" | " + plan["note"] if plan.get("note") else "")))
+    except Exception as e: _err("signal log", e)
+
 def _save():
     try: _atomic(_p("swing_state.json"), S)
     except Exception as e: print("[swinglab] save failed", e, flush=True)
@@ -138,7 +172,7 @@ def _new_acct():
 
 def _new_state():
     return dict(v=1, enabled=True, created=_ts(), accts={a: _new_acct() for a, _, _ in ACCTS}, intents={}, seq=0, plan=None, preview=None,
-                done={}, acd=None, d1m={}, last_err=None)
+                done={}, acd=None, d1m={}, last_err=None, mexp_seen=[], mix_ref=dict(day=str(date.today()), t8=CFG["start_cash"]))
 
 def init(globals_dict):
     global G, S, DIR, READY
@@ -149,8 +183,10 @@ def init(globals_dict):
         try:
             if os.path.exists(_p("swing_state.json")):
                 S.update(json.load(open(_p("swing_state.json"), encoding="utf-8")))
+                if "core" not in S["accts"] or "mix_ref" not in S:      # Core added later: the 70/30 view starts from the 8% target's value today
+                    S["mix_ref"] = dict(day=str(date.today()), t8=round(_equity("target8") if "target8" in S["accts"] else CFG["start_cash"], 2))
                 for a, _, _ in ACCTS: S["accts"].setdefault(a, _new_acct())
-                S.setdefault("d1m", {})
+                S.setdefault("d1m", {}); S.setdefault("mexp_seen", [])
         except Exception as e: _err("load state", e)
         try: EVENTS[:] = []
         except Exception: pass
@@ -278,11 +314,14 @@ def swing_flags(rows):
     rn = (c / c.shift(10) - 1) * 100; q = rn.rolling(500, min_periods=250).rank(pct=True)
     ibs = (df.close - df.low) / (df.high - df.low)
     hi250 = c.rolling(250).max(); gap = (df.open / c.shift(1) - 1) * 100
+    lr = np.log(c).diff(); up_ = lr.clip(lower=0).rolling(14).mean(); dn_ = (-lr.clip(upper=0)).rolling(14).mean(); rsi = 100 - 100 / (1 + up_ / dn_)   # as r7/candidates.py
     L = len(df) - 1
     v = dict(day=df.day.iloc[L], close=float(c.iloc[L]), ret10=_r(rn.iloc[L]), ret10_rank=_r(q.iloc[L], 3), close_pos=_r(ibs.iloc[L], 3),
              below_52w_high=_r((1 - c.iloc[L] / hi250.iloc[L]) * 100), gap=_r(gap.iloc[L]), up_day=bool(df.close.iloc[L] >= df.open.iloc[L]))
     v["P1"] = bool(q.iloc[L] > 0.8 and ibs.iloc[L] < 0.2)
     v["P2"] = bool(c.iloc[L] <= hi250.iloc[L] * 0.90 and gap.iloc[L] > 0.3 and df.close.iloc[L] < df.open.iloc[L])
+    v["rsi14"] = _r(rsi.iloc[L], 1); v["L1"] = bool(rsi.iloc[L] > 70 and ibs.iloc[L] < 0.2)
+    v["Q_dip"] = bool(c.iloc[L] <= hi250.iloc[L] * 0.95)
     return v
 
 def _plan_for(day, rows, source):
@@ -293,6 +332,15 @@ def _plan_for(day, rows, source):
         fl = swing_flags(rows); plan["flags"] = fl
         for rule in ("P1", "P2"):
             if fl[rule]: plan["entries"].append(dict(rule=rule, exit_due=str(_next_trading(day, 1 if rule == "P1" else 3)), why=_why(rule, fl)))
+        if fl["L1"]: plan["entries"].append(dict(rule="L1", exit_due=str(_next_trading(day, 20)), why=_why("L1", fl)))
+        prev = str(_prev_trading(day))
+        with LOCK: seen = list(S.get("mexp_seen") or [])
+        e0 = [e for e in seen if prev <= e < str(day)]
+        if e0:
+            e1 = _monthly_after(day)
+            if not fl["Q_dip"]: plan["q_check"] = f"first day after the {e0[-1]} monthly expiry, but Nifty is only {fl['below_52w_high']:.1f}% below its 52-week high (Q needs 5%+)"
+            elif e1 is None: plan["q_check"] = "Q day, but the next monthly expiry is not in the instrument list"
+            else: plan["entries"].append(dict(rule="Q", exit_due=str(e1), why=f"first trading day after the {e0[-1]} monthly expiry and Nifty is {fl['below_52w_high']:.1f}% below its 52-week high"))
     else: plan["note"] = "daily data does not end on the previous trading day; P1/P2 not checked"
     if _left_in_month(day) == 4:
         plan["entries"].append(dict(rule="P3", exit_due=str(_nth_of_next_month(day, 4)), why=f"{day} is the 4th-last trading day of the month"))
@@ -312,6 +360,7 @@ def _next_p3(day):
     return None
 
 def _why(rule, fl):
+    if rule == "L1": return f"RSI(14) is {fl['rsi14']:.0f} (above 70: a hot market) and Nifty closed in the bottom 20% of the day's range ({fl['close_pos']:.2f}); hold 20 trading days"
     if rule == "P1": return f"10-day rise {fl['ret10']:+.1f}% is in the top 20% of the last 2 years (rank {fl['ret10_rank']:.2f}) and Nifty closed in the bottom 20% of the day's range ({fl['close_pos']:.2f})"
     return f"Nifty is {fl['below_52w_high']:.1f}% below its 52-week high, opened {fl['gap']:+.2f}% higher and closed lower"
 
@@ -398,11 +447,12 @@ def _interest():
 # ----------------------------------------------------------------------------- opening and closing
 def _open_swing(rule, exit_due, why):
     """Open the swing trade for `rule` in every account that trades it: monthly spread (C) and, for P1/P2, weekly spread (C+)."""
+    if rule == "Q": return _open_q(exit_due, why)
     spot = _spot()
     if not spot: raise RuntimeError("no fresh Nifty price")
     due = date.fromisoformat(exit_due); W = CFG["spread_pts"]
     k1, k2 = round((spot - W) / 50) * 50, round((spot + W) / 50) * 50
-    structs = [("M", _monthly_after(due + timedelta(days=7)), ["SW_M", "SW_CP"] if rule == "P3" else ["SW_M"])]
+    structs = [("M", _monthly_after(due + timedelta(days=7)), ["L1"] if rule == "L1" else ["SW_M", "SW_CP"] if rule == "P3" else ["SW_M"])]
     if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP"]))
     for st, ex, tags in structs:
         try:
@@ -412,9 +462,22 @@ def _open_swing(rule, exit_due, why):
             if debit <= 0: raise RuntimeError(f"bad spread price {debit}")
             accts = [a for t in tags for a in _accts_for(t)]
             _open_intent(kind="swing", rule=rule, struct=st, legs=[dict(L, side=1, expiry=str(ex), px=_buy_px(L)), dict(Sh, side=-1, expiry=str(ex), px=_sell_px(Sh))],
-                         unit_pts=debit, accts=accts, spot=spot, exit_due=exit_due, why=why,
+                         unit_pts=debit, accts=accts, spot=spot, exit_due=exit_due, why=why, extra=dict(stop_spot=None) if rule == "L1" else None,
                          label=f"{ex:%d %b} {L['strike']:.0f}/{Sh['strike']:.0f} CE spread ({'monthly' if st == 'M' else 'weekly'})")
         except Exception as e: _err(f"open {rule} {st}", e)
+
+def _open_q(exit_due, why):
+    """Q: sell the monthly put ~6% below Nifty, buy the one ~9% below, hold to expiry."""
+    spot = _spot()
+    if not spot: raise RuntimeError("no fresh Nifty price")
+    ex = date.fromisoformat(exit_due); rows = _chain(ex)
+    A, B = _leg(rows, "PE", round(spot * 0.94 / 50) * 50), _leg(rows, "PE", round(spot * 0.91 / 50) * 50)
+    if B["strike"] >= A["strike"]: raise RuntimeError("bad Q strikes")
+    credit = _sell_px(A) - _buy_px(B)
+    if credit <= 0: raise RuntimeError(f"bad Q credit {credit}")
+    _open_intent(kind="credit", rule="Q", struct="M", legs=[dict(A, side=-1, expiry=str(ex), px=_sell_px(A)), dict(B, side=1, expiry=str(ex), px=_buy_px(B))],
+                 unit_pts=-credit, accts=_accts_for("Q"), spot=spot, exit_due=exit_due, why=why, extra=dict(width=A["strike"] - B["strike"]),
+                 label=f"{ex:%d %b} {A['strike']:.0f}/{B['strike']:.0f} PE credit spread (monthly, held to expiry)")
 
 def _open_intent(kind, rule, struct, legs, unit_pts, accts, spot, label, why, exit_due=None, side=1, extra=None):
     lot = int(g("LOT", 65) or 65)
@@ -426,12 +489,18 @@ def _open_intent(kind, rule, struct, legs, unit_pts, accts, spot, label, why, ex
         if extra: it.update(extra)
         for a in accts:
             A = S["accts"][a]; eq = _equity(a); unit = unit_pts * lot
-            if kind == "swing":
+            sz = ACCT_SIZE.get(a)
+            if kind == "credit":
+                ml = (it["width"] + unit_pts) * lot                  # most a lot can lose: strike width minus the credit
+                lots = min(max(int(eq // Q_PER_LOT), 1), int(A["cash"] // ml), 200); blocked = lots * ml
+            elif kind == "swing":
                 blk1 = unit + CFG["short_margin"]
-                lots = max(int(eq * CFG["size_frac"] // unit), 1 if unit <= CFG["size_max_frac"] * eq else 0); lots = min(lots, int(A["cash"] // blk1), 200)
+                fr, mx = (sz["swing_frac"], sz["swing_max"]) if sz else (CFG["size_frac"], CFG["size_max_frac"])
+                lots = max(int(eq * fr // unit), 1 if unit <= mx * eq else 0); lots = min(lots, int(A["cash"] // blk1), 200)
                 blocked = lots * blk1
             else:
-                lots = min(max(1, int(eq // CFG["acd_per_lot"])), int(A["cash"] // unit), 200); blocked = lots * unit
+                lots = max(int(eq * sz["acd_frac"] // unit), 1 if unit <= sz["acd_max"] * eq else 0) if sz else max(1, int(eq // CFG["acd_per_lot"]))
+                lots = min(lots, int(A["cash"] // unit), 200); blocked = lots * unit
             if lots < 1: it["skipped"][a] = "not enough free money"; continue
             qty = lots * lot
             orders = [("B" if l["side"] > 0 else "S", l["px"], qty) for l in legs]
@@ -441,7 +510,8 @@ def _open_intent(kind, rule, struct, legs, unit_pts, accts, spot, label, why, ex
         if not it["pos"]:
             _event(f"{RULE_NAME.get(rule, rule)}: no account could afford {label}", "warn"); return None
         S["intents"][iid] = it; _save()
-    _event(f"BOUGHT {RULE_NAME.get(rule, rule)} - {label} at {unit_pts:.2f} pts (Nifty {spot:,.1f}) for " +
+    _fill_log(it, "entry", legs, [l["px"] for l in legs], spot)
+    _event(f"{'SOLD (credit)' if kind == 'credit' else 'BOUGHT'} {RULE_NAME.get(rule, rule)} - {label} at {unit_pts:.2f} pts (Nifty {spot:,.1f}) for " +
            ", ".join(f"{ANAME[a]} {p['lots']} lot" for a, p in it["pos"].items()), "trade")
     return iid
 
@@ -451,8 +521,13 @@ def _close_intent(iid, reason):
         if not it or it["status"] not in ("OPEN", "QUEUED"): return
         it["status"] = "CLOSING"
     try:
-        qs = _live_legs(it); spot = _spot() or _f((it.get("mark") or {}).get("spot")) or it["spot_in"]
-        exit_px = [(_sell_px(q) if l["side"] > 0 else _buy_px(q)) for l, q in zip(it["legs"], qs)]
+        if it["kind"] == "credit" and str(date.today()) > it["exit_due"]:      # expired while the app was off: settle at the expiry-day close
+            st = [r_[4] for r_ in DATA["daily"] if r_[0] == it["exit_due"]]
+            if not st: raise RuntimeError("expiry-day close not loaded yet")
+            spot = float(st[0]); qs = [dict(ltp=max(l["strike"] - spot, 0)) for l in it["legs"]]; exit_px = [q["ltp"] for q in qs]; reason += " (settled at the expiry close)"
+        else:
+            qs = _live_legs(it); spot = _spot() or _f((it.get("mark") or {}).get("spot")) or it["spot_in"]
+            exit_px = [(_sell_px(q) if l["side"] > 0 else _buy_px(q)) for l, q in zip(it["legs"], qs)]
         value = sum(l["side"] * p for l, p in zip(it["legs"], exit_px))          # what the position is worth per unit now
         with LOCK:
             for a, p in it["pos"].items():
@@ -470,7 +545,8 @@ def _close_intent(iid, reason):
             it.update(status="CLOSED", t_out=_ts(), exit_value=_r(value), spot_out=_r(spot), reason=reason, exit_px=[_r(x) for x in exit_px])
             S["closed"] = (S.get("closed") or [])[-300:] + [dict((k, it[k]) for k in ("id", "kind", "rule", "struct", "label", "t_in", "t_out", "unit_pts", "exit_value", "spot_in", "spot_out", "reason"))]
             del S["intents"][iid]; _save()
-        _event(f"SOLD {RULE_NAME.get(it['rule'], it['rule'])} - {it['label']}: {it['unit_pts']:.2f} -> {value:.2f} pts ({reason})", "trade")
+        _fill_log(it, "exit", qs, exit_px, spot)
+        _event(f"{'CLOSED' if it['kind'] == 'credit' else 'SOLD'} {RULE_NAME.get(it['rule'], it['rule'])} - {it['label']}: {it['unit_pts']:.2f} -> {value:.2f} pts ({reason})", "trade")
     except Exception as e:
         with LOCK:
             if iid in S["intents"]: S["intents"][iid].update(status="OPEN", retry_at=time.time() + 20)
@@ -591,6 +667,10 @@ def _exit_checks(nw):
                 JOBS.put(("close", dict(iid=it["id"], reason="planned exit (retry)"))); it["status"] = "QUEUED"; continue
             if spot and it.get("stop_spot") and spot <= it["stop_spot"]:
                 JOBS.put(("close", dict(iid=it["id"], reason=f"2% stop (Nifty {spot:,.1f})"))); it["status"] = "QUEUED"
+        elif it["kind"] == "credit":
+            ts_ = str(date.today())
+            if ts_ > it["exit_due"] or (ts_ == it["exit_due"] and hmv >= "15:15"):
+                JOBS.put(("close", dict(iid=it["id"], reason="expiry"))); it["status"] = "QUEUED"
         else:
             if it["day_in"] != str(date.today()) or hmv >= "15:20":
                 JOBS.put(("close", dict(iid=it["id"], reason="15:20 close"))); it["status"] = "QUEUED"; continue
@@ -630,8 +710,11 @@ def _loop():
                 last_data = time.time(); JOBS.put(("data", {}))
             with LOCK:
                 _interest()
+                if DATA["daily_day"] == ts:
+                    me = _monthly_after(today)
+                    if me and str(me) not in S["mexp_seen"]: S["mexp_seen"] = sorted(S["mexp_seen"] + [str(me)])[-24:]; _save()
                 if S["enabled"] and DATA["daily_day"] == ts and (not S.get("plan") or S["plan"].get("day") != ts or S["plan"].get("source") != "official"):
-                    S["plan"] = _plan_for(today, DATA["daily"], "official"); _save()
+                    S["plan"] = _plan_for(today, DATA["daily"], "official"); _save(); _signal_log(S["plan"])
                     if S["plan"]["entries"]: _event("today's swing plan: " + ", ".join(e["rule"] + (" (skip: " + e["skip"] + ")" if e.get("skip") else "") for e in S["plan"]["entries"]))
                 trading = _is_trading(today)
                 if trading and _hm("09:15") <= mn < _hm("15:30"):
@@ -701,11 +784,41 @@ def _acct_view(a, all_trades):
                 month_ret=ms[-1]["ret"] if ms else None, today=round(sum(float(t["net"] or 0) for t in td)), today_n=len(td),
                 hist=hist[-800:], months=ms[-36:], trades=list(reversed(trades[-150:])), open=opens, backtest=BACKTEST[a])
 
+def _mix_view(V):
+    """X% Core + (100-X)% 8% target, both scaled from the day Core started (never rebalanced). Changing X redraws the whole history with the new split."""
+    c, t = V["core"], V["target8"]; ref = (S.get("mix_ref") or {}).get("t8") or CFG["start_cash"]; start = CFG["start_cash"]
+    wc = int(S.get("mix_core", MIX_DEFAULT)); kc, kt = wc / 100, (100 - wc) / 100 * start / ref; f = lambda x, y: round(kc * (x or 0) + kt * (y or 0))
+    th = {d: (b, m) for d, b, m in t["hist"]}; lastt = (ref, ref); hist = []
+    for d, b, m in c["hist"]:
+        lastt = th.get(d, lastt); hist.append([d, f(b, lastt[0]), f(m, lastt[1])])
+    peak, dd = start, 0.0
+    for _, _, v in hist: peak = max(peak, v); dd = min(dd, (v / peak - 1) * 100)
+    months = {}
+    for d, b, m in hist: months.setdefault(d[:7], dict(month=d[:7], end=m)); months[d[:7]]["end"] = m
+    ms = sorted(months.values(), key=lambda x: x["month"]); cm = {x["month"]: x for x in c["months"]}; tm = {x["month"]: x for x in t["months"]}
+    for i, x in enumerate(ms):
+        x["start"] = ms[i - 1]["end"] if i else start; x["ret"] = round((x["end"] / x["start"] - 1) * 100, 2)
+        a_, b_ = cm.get(x["month"], {}), tm.get(x["month"], {})
+        x["trades"] = a_.get("trades", 0) + b_.get("trades", 0); x["wins"] = a_.get("wins", 0) + b_.get("wins", 0); x["pnl"] = f(a_.get("pnl"), b_.get("pnl"))
+    mtm = f(c["mtm"], t["mtm"]); n = c["n"] + t["n"]; w = c["wins"] + t["wins"]
+    tr = sorted([dict(x, label="[Core] " + x["label"]) for x in c["trades"]] + [dict(x, label="[8% target] " + x["label"]) for x in t["trades"]], key=lambda x: x["exit_time"], reverse=True)
+    b = MIX_BT[min(MIX_BT, key=lambda k: abs(k - wc))]
+    bt = dict(month=b[1], period=f"Oct 2024 - Oct 2026, {min(MIX_BT, key=lambda k: abs(k - wc))}% Core (month-end values)", dd=b[4],
+              note=f"Not a separate account: {wc}% of the money follows Core and {100 - wc}% follows the 8% target account, never rebalanced. Backtest at this split: Rs 1L became Rs {b[0]/1e5:.2f}L in 25 months, median month {b[2]:+.1f}%, worst month {b[3]}%, {b[5]} of 25 months up.")
+    return dict(id="mix", name=f"{wc}% Core + {100 - wc}% 8% target", mix_core=wc, mix_bt={k: list(v) for k, v in MIX_BT.items()}, start=start, book=f(c["book"], t["book"]), mtm=mtm, unreal=f(c["unreal"], t["unreal"]), cash=f(c["cash"], t["cash"]),
+                interest=f(c["interest"], t["interest"]), realized=f(c["realized"], t["realized"]), fees=f(c["fees"], t["fees"]), n=n, wins=w,
+                win_rate=round(w / n * 100) if n else None, pf=None, ret=round((mtm / start - 1) * 100, 2), maxdd=round(dd, 1), month_ret=ms[-1]["ret"] if ms else None,
+                today=f(c["today"], t["today"]), today_n=c["today_n"] + t["today_n"], hist=hist, months=ms[-36:], trades=tr[:150],
+                open=c["open"] + t["open"], backtest=bt, virtual=True, since=(S.get("mix_ref") or {}).get("day"))
+
 def snapshot():
     if not READY: return dict(ready=False)
     with LOCK:
         acd = S.get("acd") or {}; tr = _read(_p("swing_trades.csv"))
-        return dict(ready=True, enabled=S["enabled"], created=S["created"], cfg=CFG, accts=[_acct_view(a, tr) for a, _, _ in ACCTS],
+        views = [_acct_view(a, tr) for a, _, _ in ACCTS]
+        try: views.append(_mix_view({v["id"]: v for v in views}))
+        except Exception as e: _err("split view", e)
+        return dict(ready=True, enabled=S["enabled"], created=S["created"], cfg=CFG, accts=views, q_per_lot=Q_PER_LOT,
                     plan=S.get("plan"), preview=S.get("preview"), acd=dict((k, acd.get(k)) for k in ("day", "status", "gap", "prev_nr7", "A", "C", "D", "fired", "done", "prev_close", "src")) if acd else None,
                     d1m_days=len(S["d1m"]), data=dict(daily_day=DATA["daily_day"], daily_last=DATA["daily"][-1][0] if DATA["daily"] else None, holidays_ok=DATA["hol_ok"]),
                     events=list(reversed(EVENTS[-60:])), err=S.get("last_err"), now=_ts(), lot=g("LOT"))
@@ -714,6 +827,11 @@ def _command(j):
     cmd = j.get("cmd")
     with LOCK:
         if cmd == "enable": S["enabled"] = bool(j.get("on")); _save(); _event("auto-trading " + ("ON" if S["enabled"] else "PAUSED")); return True, ""
+        if cmd == "mix":
+            try: w = int(j.get("core"))
+            except Exception: return False, "split must be a number"
+            if not 0 <= w <= 100: return False, "split must be 0-100"
+            S["mix_core"] = w; _save(); _event(f"split view changed to {w}% Core + {100 - w}% 8% target"); return True, ""
         if cmd == "close":
             it = S["intents"].get(j.get("id"))
             if not it or it["status"] != "OPEN": return False, "no such open trade"
@@ -721,9 +839,9 @@ def _command(j):
         if cmd == "reset":
             if S["intents"]: return False, "close the open trades first"
             stamp = _now().strftime("%Y%m%d_%H%M%S"); arch = _p(f"archive_{stamp}"); os.makedirs(arch, exist_ok=True)
-            for f in ("swing_state.json", "swing_trades.csv", "swing_equity.csv", "swing_events.log"):
+            for f in ("swing_state.json", "swing_trades.csv", "swing_equity.csv", "swing_events.log", "swing_fills.csv", "swing_signals.csv"):
                 if os.path.exists(_p(f)): shutil.move(_p(f), os.path.join(arch, f))
-            d1m = S["d1m"]; S.clear(); S.update(_new_state()); S["d1m"] = d1m; _save(); _event("fresh accounts started (old data archived)"); return True, ""
+            d1m, me_ = S["d1m"], S.get("mexp_seen", []); S.clear(); S.update(_new_state()); S["d1m"] = d1m; S["mexp_seen"] = me_; _save(); _event("fresh accounts started (old data archived)"); return True, ""
     return False, "unknown command"
 
 def register_routes(app):
@@ -738,7 +856,7 @@ def register_routes(app):
         return jsonify(ok=True) if ok else (jsonify(ok=False, error=msg), 400)
     @app.route("/api/swing/<name>.csv", endpoint="swing_csv")
     def _csv(name):
-        f = {"trades": "swing_trades.csv", "equity": "swing_equity.csv"}.get(name)
+        f = {"trades": "swing_trades.csv", "equity": "swing_equity.csv", "fills": "swing_fills.csv", "signals": "swing_signals.csv"}.get(name)
         if not f: return Response("not found", 404)
         data = open(_p(f), "rb").read() if READY and os.path.exists(_p(f)) else b""
         return Response(data, mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={f}"})

@@ -36,7 +36,7 @@ PAGE = '<div class="page" id="vSwing"><div id="swHead"></div><div class="swtabs"
 JS = r"""
 /* ---------- Swing lab ---------- */
 let swSub=(()=>{try{return localStorage.getItem('swSub')||'overview';}catch(e){return 'overview';}})(), swLast=null;
-const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da'};
+const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',mix:'#ffd54f'};
 const swInr=v=>{if(v==null||isNaN(v))return '–';const a=Math.abs(v),s=v<0?'−':'';return a>=1e7?s+'₹'+(a/1e7).toFixed(2)+' Cr':a>=1e5?s+'₹'+(a/1e5).toFixed(2)+' L':s+'₹'+Math.round(a).toLocaleString('en-IN');};
 const swSgn=v=>v==null||isNaN(v)?'–':(v>0?'+':'')+swInr(v).replace('−','−');
 const swPct=(v,d=1)=>v==null||isNaN(v)?'–':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(d)+'%';
@@ -74,10 +74,11 @@ function swRender(d){
  (typeof keepView==='function'?keepView($('swBox'),a?swAcct(d,a):swOverview(d)):($('swBox').innerHTML=a?swAcct(d,a):swOverview(d)));}
 
 function swPlanBox(d,kinds){
- const p=d.plan,pv=d.preview,fl=p&&p.flags,ent=e=>'<div class="plan"><div><b>'+swEsc(e.rule)+'</b> '+swEsc({P1:'Pullback in a strong trend',P2:'Bounce in a correction',P3:'Turn of the month'}[e.rule])+' <span class="swnote">· exit at the open on '+swEsc(e.exit_due)+'</span></div><div>'+(e.skip?'<span class="tag bad">skip: '+swEsc(e.skip)+'</span>':'<span class="tag ok">trade</span>')+'</div><div class="why">'+swEsc(e.why)+'</div></div>';
+ const p=d.plan,pv=d.preview,fl=p&&p.flags,ent=e=>'<div class="plan"><div><b>'+swEsc(e.rule)+'</b> '+swEsc({P1:'Pullback in a strong trend',P2:'Bounce in a correction',P3:'Turn of the month',L1:'20-day trade (Core only)',Q:'Put spread after a dip (Core only)'}[e.rule])+' <span class="swnote">· '+(e.rule==='Q'?'held to the '+swEsc(e.exit_due)+' expiry':'exit at the open on '+swEsc(e.exit_due))+'</span></div><div>'+(e.skip?'<span class="tag bad">skip: '+swEsc(e.skip)+'</span>':'<span class="tag ok">trade</span>')+'</div><div class="why">'+swEsc(e.why)+'</div></div>';
  let h='<div class="swbox"><h4>Swing signals</h4>';
  if(p){h+='<div class="swnote" style="margin-bottom:6px">Today, '+swEsc(p.day)+(p.note?' · '+swEsc(p.note):'')+'</div>'+(p.entries.length?p.entries.map(ent).join(''):'<div class="swnote">No swing entry today.</div>');
-  if(fl)h+='<div class="swnote" style="margin-top:8px">Last close '+swEsc(fl.day)+': 10-day move '+swPct(fl.ret10,2)+' (rank '+(fl.ret10_rank==null?'–':fl.ret10_rank)+', P1 needs above 0.80) · close at '+(fl.close_pos==null?'–':Math.round(fl.close_pos*100))+'% of the day\'s range (P1 needs under 20%) · '+(fl.below_52w_high==null?'–':fl.below_52w_high.toFixed(1))+'% below the 52-week high (P2 needs 10%+) · gap '+swPct(fl.gap,2)+(fl.up_day?' · up day':' · down day')+'</div>';
+  if(fl)h+='<div class="swnote" style="margin-top:8px">Last close '+swEsc(fl.day)+': 10-day move '+swPct(fl.ret10,2)+' (rank '+(fl.ret10_rank==null?'–':fl.ret10_rank)+', P1 needs above 0.80) · close at '+(fl.close_pos==null?'–':Math.round(fl.close_pos*100))+'% of the day\'s range (P1 needs under 20%) · '+(fl.below_52w_high==null?'–':fl.below_52w_high.toFixed(1))+'% below the 52-week high (P2 needs 10%+, Q needs 5%+) · RSI(14) '+(fl.rsi14==null?'–':fl.rsi14)+' (L1 needs above 70 with a close in the bottom 20%) · gap '+swPct(fl.gap,2)+(fl.up_day?' · up day':' · down day')+'</div>';
+  if(p.q_check)h+='<div class="swnote">Q: '+swEsc(p.q_check)+'</div>';
   if(p.p3_next)h+='<div class="swnote">Next turn-of-the-month entry: <b>'+swEsc(p.p3_next)+'</b> at the open.</div>';}
  else h+='<div class="swnote">Waiting for the daily data (loads after 08:35 on trading days).</div>';
  if(pv)h+='<div style="margin-top:10px"><b>Tomorrow ('+swEsc(pv.day)+')</b> <span class="swnote">preview from today\'s live candle; confirmed with official data next morning</span>'+(pv.entries.length?pv.entries.map(ent).join(''):'<div class="swnote">No swing entry expected.</div>')+'</div>';
@@ -96,14 +97,14 @@ function swAcdBox(d){
  return h+'</div>';}
 
 function swOverview(d){
- let h='<div class="swbox"><h4>All five accounts</h4>'+swChart(d.accts.map(a=>({name:a.name,color:SWC[a.id],pts:a.hist.map(x=>[x[0],x[2]]),base:a.start})),260)+'</div>';
+ let h='<div class="swbox"><h4>All accounts</h4>'+swChart(d.accts.map(a=>({name:a.name,color:SWC[a.id],pts:a.hist.map(x=>[x[0],x[2]]),base:a.start})),260)+'</div>';
  h+='<div class="swbox" style="margin-top:12px"><div class="tw"><table><tr><th>Account</th><th>Value now</th><th>Return</th><th>This month</th><th>Today</th><th>Open</th><th>Trades</th><th>Won</th><th>Worst fall</th><th>Backtest a month</th><th>Backtest worst fall</th></tr>'
   +d.accts.map(a=>'<tr style="cursor:pointer" onclick="swGo(\''+a.id+'\')"><td><span class="mbar" style="width:10px;background:'+SWC[a.id]+'"></span> <b>'+swEsc(a.name)+'</b></td><td>'+swInr(a.mtm)+'</td><td class="'+swC(a.ret)+'">'+swPct(a.ret)+'</td><td class="'+swC(a.month_ret)+'">'+swPct(a.month_ret)+'</td><td class="'+swC(a.today)+'">'+swSgn(a.today)+'</td><td>'+a.open.length+'</td><td>'+a.n+'</td><td>'+(a.win_rate==null?'–':a.win_rate+'%')+'</td><td class="dn">'+swPct(a.maxdd)+'</td><td>+'+a.backtest.month+'%</td><td>'+a.backtest.dd+'%</td></tr>').join('')+'</table></div>'
   +'<div class="swnote" style="margin-top:6px">Backtest figures are from the research and are not a promise. Click a row to open that account.</div></div>';
  h+='<div class="swgrid">'+swPlanBox(d)+swAcdBox(d)+'</div>';
  h+=swRules(d);
  h+='<div class="swbox"><h4>What the lab did</h4>'+(d.events.length?d.events.map(e=>'<div class="ev '+e.kind+'">'+swEsc(e.t.slice(5,16))+' · '+swEsc(e.msg)+'</div>').join(''):'<div class="swnote">Nothing yet.</div>')+'</div>';
- h+='<p style="margin-top:12px"><a class="btn" href="/api/swing/trades.csv" download>Download trades.csv</a> <a class="btn" href="/api/swing/equity.csv" download>Download equity.csv</a> <button class="red" onclick="if(confirm(\'Archive all Swing lab data and restart the five accounts?\'))swCmd({cmd:\'reset\'})">Reset all accounts</button></p>';
+ h+='<p style="margin-top:12px"><a class="btn" href="/api/swing/trades.csv" download>Download trades.csv</a> <a class="btn" href="/api/swing/equity.csv" download>Download equity.csv</a> <a class="btn" href="/api/swing/fills.csv" download>fills.csv</a> <a class="btn" href="/api/swing/signals.csv" download>signals.csv</a> <button class="red" onclick="if(confirm(\'Archive all Swing lab data and restart all accounts?\'))swCmd({cmd:\'reset\'})">Reset all accounts</button></p>';
  if(d.err)h+='<p style="color:#ef5350">Last error: '+swEsc(d.err)+'</p>';
  return h;}
 
@@ -112,11 +113,14 @@ function swRules(d){const c=d.cfg;
  +'<p><b>Swing signals</b>, decided after the close and traded at the next open (09:16): <b>P1</b> pullback in a strong trend: the 10-day rise is in the top 20% of the last 2 years and Nifty closes in the bottom 20% of the day\'s range → hold 1 day. <b>P2</b> bounce in a correction: Nifty is 10%+ below its 52-week high and opened 0.3%+ higher but closed lower → hold 3 days. <b>P3</b> turn of the month: buy on the 4th-last trading day, sell at the open of the 4th trading day of the next month. Every swing trade exits early if Nifty falls '+c.stop_pct+'% below its entry level.</p>'
  +'<p><b>Option C</b> buys the call '+c.spread_pts+' pts below spot and sells the call '+c.spread_pts+' above, in the monthly expiry at least 7 days after the exit. <b>Option C+</b> uses a weekly spread (expiry at least 2 days after the exit) for P1 and P2, and the monthly one for P3. Size: about '+Math.round(c.size_frac*100)+'% of the account as premium, at least 1 lot when one lot is under '+Math.round(c.size_max_frac*100)+'% of it; '+swInr(c.short_margin)+' a lot is set aside as margin for the sold leg.</p>'
  +'<p><b>A/C/D</b>, at most one trade a day, the first signal wins: <b>A</b> gap + opening drive: at 09:45 Nifty is 0.3%+ beyond the open in the direction of the gap. <b>C</b> only on the day after an NR7 day (narrowest range of 7): the first 5-minute close beyond the 09:15–09:30 range. <b>D</b> wild-open fade: the 09:15–09:45 range is 1.5× its 20-day average; at 10:00 trade against the side of the morning\'s average price. Buys a weekly option ~'+c.acd_itm+' pts in the money (call to buy, put to sell); 1 lot per '+swInr(c.acd_per_lot)+'. A and C exit on a trailing stop of 2× the 5-minute range or at 15:20; D exits after 60 minutes.</p>'
+ +'<p><b>L1, the 20-day trade</b> (Core only): RSI(14) above 70 and Nifty closes in the bottom 20% of the day\'s range → the same monthly 300/300 call spread, held 20 trading days with <b>no</b> 2% stop (as tested).</p>'
+ +'<p><b>Q, the put spread after a dip</b> (Core only): on the first trading day after each monthly expiry, if Nifty closed 5%+ below its 52-week high, sell the next monthly put ~6% below Nifty and buy the one ~9% below; held to expiry (closed at 15:15 on expiry day). 1 lot per '+swInr(d.q_per_lot||100000)+'; the full possible loss is set aside.</p>'
+ +'<p><b>Core</b> = Option C+ + L1 + Q, 20% of the account per swing trade: the recommended book from the Nov 2026 report. <b>The split view</b> (default 70% Core + 30% 8% target) is not a separate account: it adds up X% of Core and the rest of the 8% target account from the day Core started. Change X on its page; the whole history is redrawn with the new split.</p>'
  +'<p><b>8% target</b> runs Option C+ and A/C/D together with 15% of the account in each trade (at least 1 lot while one lot is under 22.5% of it). Bigger bets: bigger months and deeper falls.</p>'
  +'<p>Fills: buys at the ask, sells at the bid, broker charges deducted. Idle cash earns '+Math.round(c.liquid_rate*100)+'% a year like a liquid fund (shown separately).</p></div></details>';}
 
 function swAcct(d,a){
- const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd');
+ const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd')||k==='target8'||k==='mix';
  let h='<div class="cards">'
   +card('<span class="mbar" style="width:9px;background:'+SWC[k]+'"></span> Account value',swInr(a.mtm),'started with '+swInr(a.start)+(a.unreal?' · open trades '+swSgn(a.unreal):''))
   +card('Return','<span class="'+swC(a.ret)+'">'+swPct(a.ret,2)+'</span>','this month '+swPct(a.month_ret))
@@ -126,6 +130,7 @@ function swAcct(d,a){
   +card('Realised P&L','<span class="'+swC(a.realized)+'">'+swSgn(a.realized)+'</span>','after '+swInr(a.fees)+' charges')
   +card('Worst fall','<span class="dn">'+swPct(a.maxdd)+'</span>','from the highest value so far')
   +card('Backtest','+'+bt.month+'% a month',swEsc(bt.period)+' · worst fall '+bt.dd+'%')+'</div>';
+ if(a.virtual)h+=swMixBox(a);
  h+='<div class="swbox" style="margin-top:12px"><h4>Account value</h4>'+swChart([{name:a.name,color:SWC[k],pts:a.hist.map(x=>[x[0],x[2]]),base:a.start}],230)+'<div class="swnote">'+swEsc(bt.note)+'</div></div>';
  h+='<div class="swbox" style="margin-top:12px"><h4>Open trades ('+a.open.length+')</h4>'+(a.open.length?a.open.map(p=>swPos(p)).join(''):'<div class="swnote">None. '+(swing?'Swing trades open at 09:16 on signal days. ':'')+(acd?'A/C/D trades open between 09:35 and the afternoon when a rule fires.':'')+'</div>')+'</div>';
  h+='<div class="swgrid">'+(swing?swPlanBox(d):'')+(acd?swAcdBox(d):'')+'</div>';
@@ -137,6 +142,16 @@ function swAcct(d,a){
  h+='<div style="margin-top:12px">'+swRules(d)+'</div>';
  return h;}
 
+function swMixBox(a){
+ const w=a.mix_core,bt=a.mix_bt||{};
+ let h='<div class="swbox" style="margin-top:12px"><h4>Change the split</h4><div class="swnote">How much of the money follows <b>Core</b>; the rest follows the <b>8% target</b> account. This is only a view: no trades change, and the whole history is redrawn with the new split.</div>'
+  +'<div style="display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap"><span>Core</span><input id="swMixR" type="range" min="0" max="100" step="5" value="'+w+'" oninput="document.getElementById(\'swMixL\').textContent=this.value+\'% Core + \'+(100-this.value)+\'% 8% target\'" style="flex:1;min-width:160px"><span>8% target</span>'
+  +'<b id="swMixL">'+w+'% Core + '+(100-w)+'% 8% target</b><button onclick="swCmd({cmd:\'mix\',core:+document.getElementById(\'swMixR\').value})">Save split</button></div>'
+  +'<div class="tw"><table><tr><th>Core share</th><th>Rs 1L became</th><th>A month</th><th>Median month</th><th>Worst month</th><th>Worst fall</th><th>Months up</th></tr>'
+  +Object.keys(bt).map(Number).sort((x,y)=>y-x).map(k=>{const b=bt[k];return '<tr'+(Math.abs(k-w)<5?' style="background:rgba(255,213,79,.15)"':'')+'><td>'+k+'%</td><td>'+swInr(b[0])+'</td><td>+'+b[1]+'%</td><td>'+(b[2]>=0?'+':'')+b[2]+'%</td><td class="dn">'+b[3]+'%</td><td class="dn">'+b[4]+'%</td><td>'+b[5]+'/25</td></tr>';}).join('')
+  +'</table></div><div class="swnote">Backtest on real prices, Oct 2024 – Oct 2026, month-end values, never rebalanced. Short history: treat as a guide, not a promise.</div></div>';
+ return h;}
+
 function swPos(p){
  let h='<div class="pos"><div class="swtop"><div><b>'+swEsc(p.rule)+'</b> '+swEsc(p.rule_name)+' · '+swEsc(p.label)+' · '+p.lots+' lot ('+p.qty+')</div><div class="'+swC(p.unreal)+'" style="font-size:16px;font-weight:600">'+(p.unreal==null?'<span class="swnote">waiting for prices</span>':swSgn(p.unreal))+'</div></div>'
   +'<div class="swnote">Bought '+swEsc(p.t_in.slice(5,16))+' at '+(+p.entry).toFixed(2)+' pts · now '+(p.now==null?'–':(+p.now).toFixed(2))+' · money tied up '+swInr(p.blocked)+(p.status!=='OPEN'?' · <b>closing…</b>':'')+'</div>';
@@ -144,6 +159,7 @@ function swPos(p){
   const lo=p.stop,hi=p.spot_in*1.03,pct=Math.max(0,Math.min(1,(p.spot-lo)/(hi-lo))),pin=(p.spot_in-lo)/(hi-lo);
   h+='<div class="bar"><div style="position:absolute;left:0;top:0;height:8px;width:'+(pct*100)+'%;border-radius:5px;background:'+(p.spot>=p.spot_in?'#26a69a':'#ef9a9a')+'"></div><div style="position:absolute;left:'+(pin*100)+'%;top:-3px;width:2px;height:14px;background:#c9d4e3"></div></div>'
    +'<div class="swnote">Nifty '+Math.round(p.spot).toLocaleString('en-IN')+' · entry '+Math.round(p.spot_in).toLocaleString('en-IN')+' · stop '+Math.round(p.stop).toLocaleString('en-IN')+' · planned exit at the open on <b>'+swEsc(p.exit_due)+'</b></div>';}
+ if(p.kind==='credit')h+='<div class="swnote">Credit spread: collected '+(-p.entry).toFixed(2)+' pts a unit; held to the <b>'+swEsc(p.exit_due)+'</b> expiry, no stop. Money set aside = the most it can lose.</div>';
  if(p.kind==='acd')h+='<div class="swnote">'+(p.exit_rule==='HOLD60'?'Exits at '+swEsc(p.hold_until)+' (60 minutes)':'Trailing stop at '+(p.stop_lvl==null?'–':(p.stop_lvl>0?'+':'')+p.stop_lvl)+' pts from entry · best so far '+(p.best==null?'–':'+'+p.best)+' pts · otherwise exits at 15:20')+'</div>';
  h+='<button class="red" style="margin-top:8px;padding:4px 10px" onclick="if(confirm(\'Close this trade now in every account that holds it?\'))swCmd({cmd:\'close\',id:\''+p.id+'\'})">Close now</button></div>';
  return h;}

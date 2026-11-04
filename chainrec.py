@@ -4,6 +4,8 @@ CHAIN RECORDER - saves the whole option chain once a minute, plus India VIX, plu
   * Every minute (09:14-15:31 IST): all strikes within +-1500 pts of Nifty for the nearest expiry and +-500 pts for the next
     expiry: bid/ask + sizes, last price, open interest (and yesterday's), volume, implied volatility, delta/theta/gamma/vega,
     for calls and puts. File: spread_data/ticks/ticks_chain-<day>.csv
+  * The next two MONTHLY expiries (when they are not already one of the two nearest): strikes from 2600 below to 1200 above Nifty,
+    every minute around the open (09:14-09:46) and the close (15:00-15:31), every 5 minutes in between. Same file and columns.
   * India VIX every ~20 s.                       File: spread_data/ticks/ticks_vix-<day>.csv
   * A small daily facts file (expiries, lot size, which keys are which).  File: spread_data/ticks/ticks_meta-<day>.csv
   * feed_keys(): the nearest TICK_STRIKES strikes each side of the money (calls and puts) are added to the live feed, so their
@@ -21,6 +23,8 @@ except Exception:
 IST = timezone(timedelta(hours=5, minutes=30))
 TICK_STRIKES = 10          # strikes each side of the money whose ticks are recorded
 NEAR_RANGE, NEXT_RANGE = 1500, 500
+MONTHLY_DOWN, MONTHLY_UP = 2600, 1200     # the next 2 MONTHLY expiries too (Option C, L1 and Q trade them; Q sells puts ~6-9% below Nifty)
+MONTHLY_EVERY_S = 300                     # every 5 minutes, but every minute 09:14-09:46 and 15:00-15:31 (entries and exits happen then)
 EVERY_S, VIX_EVERY_S = 60, 20
 VIX_KEY = "NSE_INDEX|India VIX"
 
@@ -59,18 +63,30 @@ def feed_keys():
 def _get(url, params):
     r = requests.get(url, headers=g("HDR"), params=params, timeout=20); r.raise_for_status(); return r.json()
 
+_LAST_MONTHLY = [0.0]
+def _monthlies(all_exps, skip):
+    last = {}
+    for e in all_exps: last[(e.year, e.month)] = max(last.get((e.year, e.month), e), e)
+    return [e for e in sorted(last.values()) if e not in skip][:2]
+
 def _snapshot(nw):
     today = nw.date(); day = f"{nw:%Y-%m-%d}"
-    exps = [e for e in g("exp_choices")() if e >= today][:2]
+    all_exps = [e for e in g("exp_choices")() if e >= today]; exps = all_exps[:2]
     ts = round(time.time(), 1); out = []; first_rows = None
-    for i, e in enumerate(exps):
+    mins = nw.hour * 60 + nw.minute; busy = 9 * 60 + 14 <= mins <= 9 * 60 + 46 or mins >= 15 * 60
+    mon = _monthlies(all_exps, exps) if (busy or time.time() - _LAST_MONTHLY[0] >= MONTHLY_EVERY_S - 5) else []
+    if mon: _LAST_MONTHLY[0] = time.time()
+    for i, e in enumerate(exps + mon):
         data = _get("https://api.upstox.com/v2/option/chain", {"instrument_key": g("UNDERLYING_KEY"), "expiry_date": str(e)}).get("data") or []
         spot = next((_f(x.get("underlying_spot_price")) for x in data if _f(x.get("underlying_spot_price"))), None)
         if not spot: continue
         rng = NEAR_RANGE if i == 0 else NEXT_RANGE
         for x in data:
             k = _f(x.get("strike_price"))
-            if k is None or abs(k - spot) > rng: continue
+            if k is None: continue
+            if i >= len(exps):
+                if not (-MONTHLY_DOWN <= k - spot <= MONTHLY_UP): continue
+            elif abs(k - spot) > rng: continue
             row = [ts, str(e), (e - today).days, k, spot, x.get("pcr")]
             for side in ("call_options", "put_options"):
                 o = x.get(side) or {}; m = o.get("market_data") or {}; gr = o.get("option_greeks") or {}
