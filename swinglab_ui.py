@@ -36,7 +36,7 @@ PAGE = '<div class="page" id="vSwing"><div id="swHead"></div><div class="swtabs"
 JS = r"""
 /* ---------- Swing lab ---------- */
 let swSub=(()=>{try{return localStorage.getItem('swSub')||'overview';}catch(e){return 'overview';}})(), swLast=null;
-const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350'};
+const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da'};
 const swInr=v=>{if(v==null||isNaN(v))return '–';const a=Math.abs(v),s=v<0?'−':'';return a>=1e7?s+'₹'+(a/1e7).toFixed(2)+' Cr':a>=1e5?s+'₹'+(a/1e5).toFixed(2)+' L':s+'₹'+Math.round(a).toLocaleString('en-IN');};
 const swSgn=v=>v==null||isNaN(v)?'–':(v>0?'+':'')+swInr(v).replace('−','−');
 const swPct=(v,d=1)=>v==null||isNaN(v)?'–':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(d)+'%';
@@ -71,7 +71,7 @@ function swRender(d){
  const tabs=[['overview','Overview',null]].concat(d.accts.map(a=>[a.id,a.name,a]));
  $('swTabs').innerHTML=tabs.map(([k,n,a])=>'<button class="'+(swSub===k?'act':'')+'" onclick="swGo(\''+k+'\')">'+(a?'<span class="dot" style="background:'+SWC[k]+'"></span>':'')+swEsc(n)+(a?' <span class="pill '+swC(a.ret)+'">'+swPct(a.ret)+'</span>':'')+'</button>').join('');
  const a=d.accts.find(x=>x.id===swSub);
- $('swBox').innerHTML=a?swAcct(d,a):swOverview(d);}
+ (typeof keepView==='function'?keepView($('swBox'),a?swAcct(d,a):swOverview(d)):($('swBox').innerHTML=a?swAcct(d,a):swOverview(d)));}
 
 function swPlanBox(d,kinds){
  const p=d.plan,pv=d.preview,fl=p&&p.flags,ent=e=>'<div class="plan"><div><b>'+swEsc(e.rule)+'</b> '+swEsc({P1:'Pullback in a strong trend',P2:'Bounce in a correction',P3:'Turn of the month'}[e.rule])+' <span class="swnote">· exit at the open on '+swEsc(e.exit_due)+'</span></div><div>'+(e.skip?'<span class="tag bad">skip: '+swEsc(e.skip)+'</span>':'<span class="tag ok">trade</span>')+'</div><div class="why">'+swEsc(e.why)+'</div></div>';
@@ -112,6 +112,7 @@ function swRules(d){const c=d.cfg;
  +'<p><b>Swing signals</b>, decided after the close and traded at the next open (09:16): <b>P1</b> pullback in a strong trend: the 10-day rise is in the top 20% of the last 2 years and Nifty closes in the bottom 20% of the day\'s range → hold 1 day. <b>P2</b> bounce in a correction: Nifty is 10%+ below its 52-week high and opened 0.3%+ higher but closed lower → hold 3 days. <b>P3</b> turn of the month: buy on the 4th-last trading day, sell at the open of the 4th trading day of the next month. Every swing trade exits early if Nifty falls '+c.stop_pct+'% below its entry level.</p>'
  +'<p><b>Option C</b> buys the call '+c.spread_pts+' pts below spot and sells the call '+c.spread_pts+' above, in the monthly expiry at least 7 days after the exit. <b>Option C+</b> uses a weekly spread (expiry at least 2 days after the exit) for P1 and P2, and the monthly one for P3. Size: about '+Math.round(c.size_frac*100)+'% of the account as premium, at least 1 lot when one lot is under '+Math.round(c.size_max_frac*100)+'% of it; '+swInr(c.short_margin)+' a lot is set aside as margin for the sold leg.</p>'
  +'<p><b>A/C/D</b>, at most one trade a day, the first signal wins: <b>A</b> gap + opening drive: at 09:45 Nifty is 0.3%+ beyond the open in the direction of the gap. <b>C</b> only on the day after an NR7 day (narrowest range of 7): the first 5-minute close beyond the 09:15–09:30 range. <b>D</b> wild-open fade: the 09:15–09:45 range is 1.5× its 20-day average; at 10:00 trade against the side of the morning\'s average price. Buys a weekly option ~'+c.acd_itm+' pts in the money (call to buy, put to sell); 1 lot per '+swInr(c.acd_per_lot)+'. A and C exit on a trailing stop of 2× the 5-minute range or at 15:20; D exits after 60 minutes.</p>'
+ +'<p><b>8% target</b> runs Option C+ and A/C/D together with 15% of the account in each trade (at least 1 lot while one lot is under 22.5% of it). Bigger bets: bigger months and deeper falls.</p>'
  +'<p>Fills: buys at the ask, sells at the bid, broker charges deducted. Idle cash earns '+Math.round(c.liquid_rate*100)+'% a year like a liquid fund (shown separately).</p></div></details>';}
 
 function swAcct(d,a){

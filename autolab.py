@@ -28,7 +28,9 @@ RULES = dict(
     itm_pts=100, min_dte=2,                                    # option strike distance; skip expiries closer than this many days
     safety_max_entries_per_day=40,                             # only a runaway-bug guard, not a trading limit
     fresh_quote_s=10.0, warmup_s=900, mark_every_s=5.0)
-SIGNALS = [("rvol", "BULL"), ("orbv", "BULL"), ("dtrend", "BEAR"), ("dtrend", "BULL")]   # dtrend BULL added 2026-11-02   # (signal key in the app, direction traded)
+SIGNALS = [("rvol10", "BULL"), ("rvol", "BULL"), ("orbv", "BULL"), ("dtrend", "BEAR"), ("dtrend", "BULL")]   # dtrend BULL added 2026-11-02; rvol10 added 2026-11-04
+# "virtual" signals: follow another app signal, but only while the clock is before a cut-off. Listed first so a firing in its window is traded under its own name.
+VIRTUAL = {"rvol10": ("rvol", "10:00", "rvol before 10:00")}   # (signal key in the app, direction traded)
 
 TRADE_COLS = ["trade_id", "day", "signal_key", "signal_name", "direction", "fire_time_ist", "fire_ts", "fill_time_ist", "fill_latency_s",
               "expiry", "dte", "strike", "opt_type", "instrument_key", "qty", "lot_size",
@@ -170,7 +172,9 @@ def _hook(nw, wall, qs, items, verdict):
         first = not PREV
         mo = bool(g("market_open")(nw))
         for key, d in SIGNALS:
-            st, pst = states.get(key), PREV.get(key)
+            src, until, _lbl = VIRTUAL.get(key, (key, None, None))
+            if until and nw.strftime("%H:%M") >= until: continue
+            st, pst = states.get(src), PREV.get(src)
             if not first and mo and pst is not None and pst != st and st == d:
                 _fired(nw, wall, qs, key, d, pst, items, verdict)
         if not first and mo:
@@ -187,7 +191,7 @@ def _states_str(items):
 
 def _fired(nw, wall, qs, key, d, pst, items, verdict):
     sid = f"{nw:%Y%m%d}-{key}-{d}-{int(wall * 1000)}"
-    name = next((i["name"] for i in items if i["key"] == key), key)
+    name = VIRTUAL[key][2] if key in VIRTUAL else next((i["name"] for i in items if i["key"] == key), key)
     fq, sq = qs.get(g("FUT_KEY")) or {}, qs.get(g("UNDERLYING_KEY")) or {}
     S["fired"][f"{key}:{d}"] = S["fired"].get(f"{key}:{d}", 0) + 1
     why = None
@@ -460,7 +464,7 @@ def _shadow_manage(nw, wall, qs, mo):
         S["shadow_open"] = [x for x in op if x not in done]
         _save()
 
-SHADOW_VARIANTS = [("rvol BULL - all", "rvol", "BULL", None), ("rvol BULL - before 12:00", "rvol", "BULL", "am"),
+SHADOW_VARIANTS = [("rvol BULL - all", "rvol", "BULL", None), ("rvol BULL - before 10:00", "rvol", "BULL", "b10"), ("rvol BULL - before 12:00", "rvol", "BULL", "am"),
                    ("rvol BULL - before 12:00 + above VWAP", "rvol", "BULL", "am_vw"), ("rvol BULL - after 12:00", "rvol", "BULL", "pm")]
 
 def _shadow_summary():
@@ -471,6 +475,7 @@ def _shadow_summary():
         return dict(n=len(v), won=sum(1 for x in v if x > 0), avg=_r(sum(v) / len(v), 1) if v else None, total=_r(sum(v), 0) if v else None,
                     days=len({r["day"] for r in rs}), tn=len(t), tavg=_r(sum(t) / len(t), 1) if t else None)
     def filt(rs, f):
+        if f == "b10": return [r for r in rs if r["t"] < "10:00"]
         if f == "am": return [r for r in rs if r["t"] < "12:00"]
         if f == "pm": return [r for r in rs if r["t"] >= "12:00"]
         if f == "am_vw": return [r for r in rs if r["t"] < "12:00" and r["vw"] == "1"]
@@ -501,7 +506,7 @@ def snapshot():
                        label=f"{float(r['strike']):.0f} {r['opt_type']} {r['expiry'][5:]}", entry=r["entry_px"], exit=r["exit_px"], reason=r["exit_reason"], hold=r["hold_s"],
                        move=r["fut_move_signed"], net=r["net_pnl"]) for r in RECENT[-60:]]
         tday = [t for t in trades if t["day"] == today]
-        sigs = [dict(key=f"{k}:{d}", name=k, dir=d, on=bool(S["sigs"].get(f"{k}:{d}")), total=S["fired"].get(f"{k}:{d}", 0)) for k, d in SIGNALS]
+        sigs = [dict(key=f"{k}:{d}", name=VIRTUAL[k][2] if k in VIRTUAL else k, dir=d, on=bool(S["sigs"].get(f"{k}:{d}")), total=S["fired"].get(f"{k}:{d}", 0)) for k, d in SIGNALS]
         log = [dict(t=r["time_ist"][11:19], key=r["signal_key"], dir=r["direction"], action=r["action"], trade=r["trade_id"], fut=r["fut"]) for r in SIGLOG[-40:]]
         try: shadow = _shadow_summary()
         except Exception as e: shadow = []; _err("shadow summary", e)
@@ -555,6 +560,10 @@ def register_routes(app):
 LAB_CSS = "body[data-view=lab] .main{grid-template-columns:1fr}body[data-view=lab] #vPanel,body[data-view=lab] #vChart{display:none}body[data-view=lab] #vLab{display:block}"
 LAB_PAGE = '<div class="page" id="vLab"><h3 style="margin:0 0 4px">🤖 Auto Lab</h3><div id="labBox"></div></div>\n'
 LAB_JS = r"""
+/* keep opened sections (<details>) and scrolled tables as they were when a box is redrawn */
+function keepView(box,html){if(!box)return;const key=d=>((d.querySelector('summary')||{}).textContent||'').replace(/[\d(),.\s]+/g,' ').trim();
+ const open=new Set([...box.querySelectorAll('details')].filter(d=>d.open).map(key)),sc=[...box.querySelectorAll('.tw')].map(e=>e.scrollTop);
+ box.innerHTML=html;box.querySelectorAll('details').forEach(d=>{if(open.has(key(d)))d.open=true;});box.querySelectorAll('.tw').forEach((e,i)=>{if(sc[i])e.scrollTop=sc[i];});}
 /* ---------- Auto Lab ---------- */
 async function labLoad(){try{const d=await (await fetch('/api/lab/state')).json();labRender(d);}catch(e){$('labBox').innerHTML='<p style="color:#ef5350">Could not load Auto Lab: '+e+'</p>';}}
 function labCmd(o){return post('/api/lab/cmd',o).then(()=>labLoad());}
@@ -595,7 +604,7 @@ function labRender(d){
  h+='<p style="margin-top:14px"><a class="btn" href="/api/lab/shadow.csv" download>Download shadow.csv</a> <a class="btn" href="/api/lab/trades.csv" download>Download trades.csv</a> <a class="btn" href="/api/lab/signals.csv" download>Download signals.csv</a> <a class="btn" href="/api/lab/marks.csv" download>Download marks.csv</a> <span style="color:var(--mut)">trades = one row per trade with full detail · signals = every firing and what was done · marks = price path every 5 s while a trade was open</span></p>';
  h+='<p><button class="red" onclick="if(confirm(\'Archive ALL Auto Lab data and start a fresh account?\'))labCmd({cmd:\'reset\'})">Reset Auto Lab (old data is archived, not deleted)</button></p>';
  if(d.err)h+='<p style="color:#ef5350">Last error: '+d.err+'</p>';
- $('labBox').innerHTML=h;}
+ keepView($('labBox'),h);}
 """
 
 def inject(html):
