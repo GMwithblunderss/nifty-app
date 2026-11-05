@@ -298,6 +298,7 @@ def load_settings():
         try: globals()[k] = _coerce(k, v); n += 1
         except Exception: print("ignored bad saved value for", k, v)
     print(f"Loaded {n} saved settings from settings.json")
+    if not USE_HEAVYWEIGHTS: globals()["SIG_USE_CONTRIB"] = False      # LEAN: no heavyweight-stock feed, so the contribution signal is off
 
 def margin_used():
     """Paper margin = spread width x qty for every OPEN trade (defined-risk, i.e. roughly the worst-case loss)."""
@@ -454,7 +455,15 @@ def load_opts():
         with requests.get("https://assets.upstox.com/market-quote/instruments/exchange/complete.csv.gz", stream=True, timeout=120) as r:
             r.raise_for_status()
             with open(path, "wb") as f: shutil.copyfileobj(r.raw, f)
-    inst = pd.read_csv(path, low_memory=False, usecols=lambda c: c in {"exchange", "name", "option_type", "expiry", "lot_size", "instrument_key", "instrument_type", "tradingsymbol"})
+    # read in pieces and keep only the rows we use: the whole file (every NSE/BSE/MCX instrument) took a few hundred MB and the cloud plan has 512 MB
+    keep = []
+    for ch in pd.read_csv(path, low_memory=False, chunksize=40000, usecols=lambda c: c in {"exchange", "name", "option_type", "expiry", "lot_size", "instrument_key", "instrument_type", "tradingsymbol"}):
+        m = ((ch.exchange == "NSE_FO") & (ch.name == UNDERLYING_NAME)) | ((ch.exchange == "NSE_EQ") & (ch.tradingsymbol.isin(list(NIFTY_WEIGHTS))))
+        if m.any(): keep.append(ch[m])
+    inst = pd.concat(keep, ignore_index=True); del keep
+    import gc; gc.collect()
+    try: __import__("ctypes").CDLL("libc.so.6").malloc_trim(0)      # hand freed memory back to the system (Linux)
+    except Exception: pass
     opts = inst[(inst.exchange == "NSE_FO") & (inst.name == UNDERLYING_NAME) & (inst.option_type.isin(["PE", "CE"]))].copy()
     assert len(opts) > 0, "No Nifty options found in the instrument file"
     n = pd.to_numeric(opts["expiry"], errors="coerce")
@@ -462,6 +471,7 @@ def load_opts():
                    else pd.to_datetime(opts["expiry"]).dt.date)
     LOT = int(opts.lot_size.iloc[0]); print("Lot size:", LOT)
     try:
+        if not USE_HEAVYWEIGHTS: raise RuntimeError("switched off to save memory (USE_HEAVYWEIGHTS = False)")
         e = inst[(inst.exchange == "NSE_EQ") & (inst.tradingsymbol.isin(list(NIFTY_WEIGHTS)))].drop_duplicates("tradingsymbol")
         EQ_KEYS.update(dict(zip(e.tradingsymbol, e.instrument_key))); print("Heavyweight stocks found:", len(EQ_KEYS), "of", len(NIFTY_WEIGHTS))
     except Exception as ex: print("Could not find heavyweight stocks (index contribution signal will show NO DATA):", ex)
@@ -1955,7 +1965,9 @@ SR_LIVE_MAX_GAP = 10.0                        # live excursions are trusted only
 SR_STALE_QUOTE = 15.0                         # a quote whose last tick is older than this is never used
 SR_GIVE_UP = 900.0                            # no usable price 15 min after a horizon -> UNRESOLVED_NO_DATA (never guessed)
 SR_CLOSE_TOD = 15*3600+30*60                  # 15:30 IST: horizons landing at/after this are NOT_REACHED_MARKET_CLOSED
-SR_REPORT_EVERY = 600.0
+SR_REPORT_EVERY = 3600.0   # (unused while SR_REPORT_LIVE is off)
+SR_REPORT_LIVE = False      # LEAN: the signal report re-reads the whole growing signal CSVs into memory; it is now built only when the app stops
+                            # (the CSVs themselves are still written every time, nothing is lost; the full report can be rebuilt offline)
 SR_BB = ("BULL", "BEAR")
 SR_EVENTS = os.path.join(SR_DIR, "signal_events.csv"); SR_OUTCOMES = os.path.join(SR_DIR, "signal_outcomes.csv")
 SR_CHANGES = os.path.join(SR_DIR, "signal_state_changes.csv"); SR_REPORT = os.path.join(SR_DIR, "daily_signal_report.json")
@@ -2029,6 +2041,14 @@ def _sr_append(path, cols, row):
         w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore", restval="")
         if new: w.writeheader()
         w.writerow({k: ("" if v is None else (int(v) if isinstance(v, bool) else v)) for k, v in row.items()})
+
+def _sr_iter(path):
+    """Same rows as _sr_read, one at a time (no big list in memory)."""
+    if not os.path.exists(path): return
+    csv.field_size_limit(10**8)
+    with open(path, newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh):
+            if None not in r.values(): yield r
 
 def _sr_read(path):
     if not os.path.exists(path): return []
@@ -2129,6 +2149,27 @@ def _sr_strength(key, st, loc, det):
     return lab, _sr_r(val, 4), basis
 
 
+def _mem_line():
+    """Memory now and the most so far (Linux), plus how long the app has been up."""
+    try:
+        now = peak = 0
+        for ln in open("/proc/self/status"):
+            if ln.startswith("VmRSS:"): now = int(ln.split()[1]) // 1024
+            if ln.startswith("VmHWM:"): peak = int(ln.split()[1]) // 1024
+        up = int(time.time() - START_WALL) // 60
+        return f"memory {now} MB (peak {peak} MB), up {up // 60}h{up % 60:02d}m"
+    except Exception as e: return f"memory ? ({e})"
+START_WALL = time.time()
+USE_HEAVYWEIGHTS = False    # LEAN: the 14 heavyweight stocks are no longer streamed (only the switched-off "index contribution" signal used them)
+MEM_SOFT_MB = int(os.environ.get("MEM_SOFT_MB", "430"))   # above this the app saves everything and restarts itself cleanly,
+MEM_HARD_MB = int(os.environ.get("MEM_HARD_MB", "480"))   # instead of being killed by Render at 512 MB and losing the last minutes
+def _rss_mb():
+    try:
+        for ln in open("/proc/self/status"):
+            if ln.startswith("VmRSS:"): return int(ln.split()[1]) // 1024
+    except Exception: pass
+    return 0
+
 # ---------- persistence / restart
 def _sr_save(force=False):
     if not (force or SR["dirty"]): return
@@ -2163,9 +2204,15 @@ def _sr_load(wall):
     SR["loaded"] = True
     os.makedirs(SR_DIR, exist_ok=True)
     _sr_write_readme()
-    evrows, outs = _sr_read(SR_EVENTS), _sr_read(SR_OUTCOMES)
-    SR["ids_ev"] = {r.get("event_id") for r in evrows}; SR["ids_out"] = {r.get("outcome_id") for r in outs}
-    SR["ids_chg"] = {r.get("change_id") for r in _sr_read(SR_CHANGES) if str(r.get("change_id", "")).startswith("T")}
+    # LEAN: stream the (growing) CSVs and keep only what the tracker needs: all ids, plus full rows for the last 2 days only
+    cut = time.time() - 2 * 86400; evrows = []; ids_ev = set()
+    for r in _sr_iter(SR_EVENTS):
+        eid = r.get("event_id"); ids_ev.add(eid)
+        if (_sr_f(r.get("signal_eval_ts")) or 0) >= cut:
+            evrows.append({k: r.get(k) for k in ("event_id", "signal_eval_ts", "levels_json", "signal_key", "signal_name", "direction", "ref_spot", "ref_fut", "fut_key", "onset_quality")})
+    outs = [{k: r.get(k) for k in ("event_id", "horizon_min", "instrument", "outcome_id")} for r in _sr_iter(SR_OUTCOMES)]
+    SR["ids_ev"] = ids_ev; SR["ids_out"] = {r.get("outcome_id") for r in outs}
+    SR["ids_chg"] = {r.get("change_id") for r in _sr_iter(SR_CHANGES) if str(r.get("change_id", "")).startswith("T")}
     if os.path.exists(SR_STATE):
         try:
             s = json.load(open(SR_STATE, encoding="utf-8"))
@@ -2569,7 +2616,7 @@ def _sr_hook(nw, wall, qs, items, v, vd):
         except Exception as e: _sr_err("trades", e)
         SR["recent"] = [e for e in SR["recent"] if wall-e[0] < 86400]
         if SR["dirty"] and wall-SR["saved"] >= 10: _sr_save()
-    if wall-SR["rep_t"] >= SR_REPORT_EVERY: SR["rep_t"] = wall; _sr_report_async()
+    if SR_REPORT_LIVE and wall-SR["rep_t"] >= SR_REPORT_EVERY: SR["rep_t"] = wall; _sr_report_async()
 
 def _sr_safe_hook(nw, wall, qs, items, v, vd):
     try: _sr_hook(nw, wall, qs, items, v, vd)
@@ -2579,7 +2626,7 @@ def _sr_shutdown():
     try:
         with SR_LOCK:
             if SR["loaded"]: _sr_chg(time.time(), "TRACKER_STOP", reason_detail=f"engine stopped; pending_events={len(SR['active'])}"); _sr_save(force=True)
-        if SR["loaded"]: _sr_write_report()
+        if SR["loaded"] and (SR_REPORT_LIVE or not ON_CLOUD): _sr_write_report()     # LEAN: not on the cloud (the stop must save fast and stay under the memory limit)
     except Exception as e: _sr_err("shutdown", e)
 
 
@@ -2702,7 +2749,12 @@ def _sr_report_async():
     def run():
         try: _sr_write_report()
         except Exception as e: _sr_err("report", e)
-        finally: SR["rep_busy"] = False
+        finally:
+            SR["rep_busy"] = False
+            try:
+                import gc; gc.collect(); __import__("ctypes").CDLL("libc.so.6").malloc_trim(0)   # give the memory back right away
+            except Exception: pass
+            print("[mem] after signal report: " + _mem_line(), flush=True)
     threading.Thread(target=run, daemon=True).start()
 
 
@@ -2970,7 +3022,20 @@ def _cloud_setup():
         if request.path == "/health": return None
         if hmac.compare_digest(request.headers.get("Authorization", "").encode("utf-8", "replace"), want): return None
         return Response("Login required", 401, {"WWW-Authenticate": 'Basic realm="Nifty dashboard"'})
-    app.add_url_rule("/health", "cloud_health", lambda: ("ok | " + persist.status_line() + " | " + chainrec.status_line(), 200, {"Content-Type": "text/plain"}))
+    app.add_url_rule("/health", "cloud_health", lambda: ("ok | " + _mem_line() + " | " + persist.status_line() + " | " + chainrec.status_line(), 200, {"Content-Type": "text/plain"}))
+    def _mem_log():                      # memory guard: give freed memory back every minute, log every 15 min, restart cleanly before Render kills the app
+        n = 0
+        while True:
+            time.sleep(60); n += 1
+            try:
+                import gc; gc.collect(); __import__("ctypes").CDLL("libc.so.6").malloc_trim(0)
+            except Exception: pass
+            mb = _rss_mb(); hm = now_ist().strftime("%H:%M")
+            if n % 15 == 0: print("[mem] " + _mem_line(), flush=True)
+            if ON_CLOUD and (mb >= MEM_HARD_MB or (mb >= MEM_SOFT_MB and not ("09:10" <= hm <= "09:50"))):
+                print(f"[mem] {mb} MB is close to the 512 MB limit: saving everything and restarting cleanly", flush=True)
+                import signal as _sg; os.kill(os.getpid(), _sg.SIGTERM); time.sleep(120)
+    threading.Thread(target=_mem_log, name="mem-log", daemon=True).start()
 # <<< CLOUD HELPERS
 
 # ------------------------------------------------------------------ main
