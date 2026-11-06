@@ -36,7 +36,7 @@ PAGE = '<div class="page" id="vSwing"><div id="swHead"></div><div class="swtabs"
 JS = r"""
 /* ---------- Swing lab ---------- */
 let swSub=(()=>{try{return localStorage.getItem('swSub')||'overview';}catch(e){return 'overview';}})(), swLast=null;
-const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',p2ac:'#f06292',p12ac:'#7986cb',mix:'#ffd54f'};
+const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',p2ac:'#f06292',p12ac:'#7986cb',combo:'#ffa726',mix:'#ffd54f'};
 const swInr=v=>{if(v==null||isNaN(v))return '–';const a=Math.abs(v),s=v<0?'−':'';return a>=1e7?s+'₹'+(a/1e7).toFixed(2)+' Cr':a>=1e5?s+'₹'+(a/1e5).toFixed(2)+' L':s+'₹'+Math.round(a).toLocaleString('en-IN');};
 const swSgn=v=>v==null||isNaN(v)?'–':(v>0?'+':'')+swInr(v).replace('−','−');
 const swPct=(v,d=1)=>v==null||isNaN(v)?'–':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(d)+'%';
@@ -131,7 +131,7 @@ function swRules(d){const c=d.cfg;
  +'<p>Fills: buys at the ask, sells at the bid, broker charges deducted. Idle cash earns '+Math.round(c.liquid_rate*100)+'% a year like a liquid fund (shown separately).</p></div></details>';}
 
 function swAcct(d,a){
- const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd')||k==='target8'||k==='mix'||k==='p2ac'||k==='p12ac';
+ const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd')||k==='target8'||k==='mix'||k==='p2ac'||k==='p12ac'||k==='combo';
  let h='<div class="cards">'
   +card('<span class="mbar" style="width:9px;background:'+SWC[k]+'"></span> Account value',swInr(a.mtm),'started with '+swInr(a.start)+(a.unreal?' · open trades '+swSgn(a.unreal):''))
   +card('Return','<span class="'+swC(a.ret)+'">'+swPct(a.ret,2)+'</span>','this month '+swPct(a.month_ret))

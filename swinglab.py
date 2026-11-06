@@ -49,7 +49,8 @@ CFG = dict(
 ACCTS = [("acd", "A/C/D", {"ACD"}), ("c", "Option C", {"SW_M"}), ("cplus", "Option C+", {"SW_CP"}),
          ("c_acd", "Option C + A/C/D", {"SW_M", "ACD"}), ("cplus_acd", "Option C+ + A/C/D", {"SW_CP", "ACD"}),
          ("target8", "8% target", {"SW_CP", "ACD"}), ("core", "Core: C+ + L1 + Q", {"SW_CP", "L1", "Q"}),
-         ("p2ac", "P2 + A + C", {"P2W", "AC"}), ("p12ac", "P1 + P2 + A + C", {"P12W", "AC"})]   # weekly spreads only; A and C without D
+         ("p2ac", "P2 + A + C", {"P2W", "AC"}), ("p12ac", "P1 + P2 + A + C", {"P12W", "AC"}),
+         ("combo", "Combined: P1 + P2 ATM + L1 + Q + A + C", {"P1W", "P2ATM", "L1", "Q", "AC"})]   # weekly spreads only; A and C without D
 MIX_DEFAULT = 70   # % of the money that follows Core in the split view; the rest follows the 8% target account. Changeable on the page.
 # real-price backtest of each split, Oct 2024 - Oct 2026 (25 month-ends, never rebalanced): Rs 1L became / compound a month / median month / worst month / worst month-end fall / months up
 MIX_BT = {0: (453529, 6.2, 7.5, -26, -45, 17), 10: (425789, 6.0, 7.4, -24, -43, 17), 20: (398049, 5.7, 6.1, -23, -41, 17), 30: (370310, 5.4, 5.1, -22, -39, 16),
@@ -59,7 +60,8 @@ MIX_BT = {0: (453529, 6.2, 7.5, -26, -45, 17), 10: (425789, 6.0, 7.4, -24, -43, 
 ACCT_SIZE = {"target8": dict(swing_frac=0.15, swing_max=0.225, acd_frac=0.15, acd_max=0.225),
              "core": dict(swing_frac=0.20, swing_max=0.30, acd_frac=0.20, acd_max=0.30),
              "p2ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0),      # as the independent check: P2 at 20%, A/C 1 lot per Rs 1L
-             "p12ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0)}
+             "p12ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0),
+             "combo": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0)}
 Q_PER_LOT = 100000.0      # Q put spread: 1 lot per Rs 1 lakh of account, the full possible loss set aside
 ANAME = {a: n for a, n, _ in ACCTS}
 BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - shown beside the live numbers
@@ -74,6 +76,8 @@ BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - s
                  note="The recommended book: Option C+ + the 20-day trade (L1) + the put spread after a dip (Q), 20% of the account per swing trade, Q 1 lot per Rs 1L. Backtest: Rs 1L to Rs 23.1L, 69% of months up, never more than 2 losing months in a row, worst month -36% (Mar 2020)."),
     "p2ac": dict(month=3.8, period="Mar 2019 - Oct 2026 (P2 on real NSE prices; A/C real option prices from Oct 2024 only)", dd=-24,
                  note="P2 on weekly call spreads at 20% of the account + A and C (no D), 1 lot per Rs 1L. Independent check: Rs 1L to Rs 32.1L (57%/yr), worst fall -24%, 2024 -4%. Out-of-sample: P2 held up on unseen data; A/C did not pass on foreign markets - this account is the live test."),
+    "combo": dict(month=3.0, period="Feb 2010 - Oct 2026, real NSE prices, lot caps applied (A/C real from Oct 2024)", dd=-47,
+                  note="The combined book: P1 weekly 300/300 spread, P2 weekly spread bought AT THE MONEY and sold 600 above, L1 monthly, Q put spread, A and C (no D). 20% per swing trade, Q and A/C 1 lot per Rs 1L. Backtest: Rs 10L to Rs 36 Cr (42%/yr), 2010-19 only 18.5%/yr, losing years 2011 (-34%) and 2016 (-18%), worst fall -47%. Before tax."),
     "p12ac": dict(month=None, period="not backtested as one book", dd=None,
                   note="P1 and P2 on weekly call spreads at 20% of the account + A and C (no D), 1 lot per Rs 1L. Each part was tested on its own; the combination was not. Compare it with P2 + A + C to see whether P1 adds anything."),
 }
@@ -462,17 +466,21 @@ def _open_swing(rule, exit_due, why):
     due = date.fromisoformat(exit_due); W = CFG["spread_pts"]
     k1, k2 = round((spot - W) / 50) * 50, round((spot + W) / 50) * 50
     structs = [("M", _monthly_after(due + timedelta(days=7)), ["L1"] if rule == "L1" else ["SW_M", "SW_CP"] if rule == "P3" else ["SW_M"])]
-    if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP", "P12W"] + (["P2W"] if rule == "P2" else [])))
+    if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP", "P12W"] + (["P2W"] if rule == "P2" else ["P1W"])))
+    if rule == "P2": structs.append(("WA", _any_after(due + timedelta(days=2)), ["P2ATM"]))     # P2 at the money / +600 (combined book)
     for st, ex, tags in structs:
+        if not any(_accts_for(t) for t in tags): continue
         try:
             if ex is None: raise RuntimeError("no suitable expiry in the instrument list")
+            if st == "WA": k1, k2 = round(spot / 50) * 50, round((spot + 600 * spot / 23500) / 50) * 50
+            else: k1, k2 = round((spot - W) / 50) * 50, round((spot + W) / 50) * 50
             rows = _chain(ex); L, Sh = _leg(rows, "CE", k1), _leg(rows, "CE", k2)
             debit = _buy_px(L) - _sell_px(Sh)
             if debit <= 0: raise RuntimeError(f"bad spread price {debit}")
             accts = list(dict.fromkeys(a for t in tags for a in _accts_for(t)))
             _open_intent(kind="swing", rule=rule, struct=st, legs=[dict(L, side=1, expiry=str(ex), px=_buy_px(L)), dict(Sh, side=-1, expiry=str(ex), px=_sell_px(Sh))],
                          unit_pts=debit, accts=accts, spot=spot, exit_due=exit_due, why=why, extra=dict(stop_spot=None) if rule == "L1" else None,
-                         label=f"{ex:%d %b} {L['strike']:.0f}/{Sh['strike']:.0f} CE spread ({'monthly' if st == 'M' else 'weekly'})")
+                         label=f"{ex:%d %b} {L['strike']:.0f}/{Sh['strike']:.0f} CE spread ({'monthly' if st == 'M' else 'weekly, at the money / +600' if st == 'WA' else 'weekly'})")
         except Exception as e: _err(f"open {rule} {st}", e)
 
 def _open_q(exit_due, why):
