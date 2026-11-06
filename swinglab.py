@@ -41,14 +41,15 @@ CFG = dict(
     spread_pts=300,          # swing spread strikes: spot -300 (buy) and spot +300 (sell)
     acd_itm=100,             # A/C/D: option 100 pts in the money
     liquid_rate=0.06,        # idle cash earns this a year (a liquid fund), as in the backtest
-    fresh_s=15.0,            # a quote older than this is not used for fills
+    fresh_s=5.0,             # a quote older than this is not used for fills (was 15 s: too kind on fast days)
     swing_from="09:16", swing_until="09:45",   # swing entries/exits happen at the open (first minute skipped for sane quotes)
     acd_late_s=180,          # an A/C/D entry more than 3 minutes late is skipped
     eod_at="15:31", preview_at="15:36")
 
 ACCTS = [("acd", "A/C/D", {"ACD"}), ("c", "Option C", {"SW_M"}), ("cplus", "Option C+", {"SW_CP"}),
          ("c_acd", "Option C + A/C/D", {"SW_M", "ACD"}), ("cplus_acd", "Option C+ + A/C/D", {"SW_CP", "ACD"}),
-         ("target8", "8% target", {"SW_CP", "ACD"}), ("core", "Core: C+ + L1 + Q", {"SW_CP", "L1", "Q"})]
+         ("target8", "8% target", {"SW_CP", "ACD"}), ("core", "Core: C+ + L1 + Q", {"SW_CP", "L1", "Q"}),
+         ("p2ac", "P2 + A + C", {"P2W", "AC"}), ("p12ac", "P1 + P2 + A + C", {"P12W", "AC"})]   # weekly spreads only; A and C without D
 MIX_DEFAULT = 70   # % of the money that follows Core in the split view; the rest follows the 8% target account. Changeable on the page.
 # real-price backtest of each split, Oct 2024 - Oct 2026 (25 month-ends, never rebalanced): Rs 1L became / compound a month / median month / worst month / worst month-end fall / months up
 MIX_BT = {0: (453529, 6.2, 7.5, -26, -45, 17), 10: (425789, 6.0, 7.4, -24, -43, 17), 20: (398049, 5.7, 6.1, -23, -41, 17), 30: (370310, 5.4, 5.1, -22, -39, 16),
@@ -56,7 +57,9 @@ MIX_BT = {0: (453529, 6.2, 7.5, -26, -45, 17), 10: (425789, 6.0, 7.4, -24, -43, 
           80: (231611, 3.4, 1.4, -20, -26, 15), 90: (203871, 2.9, 1.8, -21, -24, 15), 100: (176131, 2.3, 1.6, -23, -23, 15)}
 # accounts that size differently from CFG: fraction of the account put into each trade's premium (at least 1 lot while one lot is under `max`)
 ACCT_SIZE = {"target8": dict(swing_frac=0.15, swing_max=0.225, acd_frac=0.15, acd_max=0.225),
-             "core": dict(swing_frac=0.20, swing_max=0.30, acd_frac=0.20, acd_max=0.30)}
+             "core": dict(swing_frac=0.20, swing_max=0.30, acd_frac=0.20, acd_max=0.30),
+             "p2ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0),      # as the independent check: P2 at 20%, A/C 1 lot per Rs 1L
+             "p12ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0)}
 Q_PER_LOT = 100000.0      # Q put spread: 1 lot per Rs 1 lakh of account, the full possible loss set aside
 ANAME = {a: n for a, n, _ in ACCTS}
 BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - shown beside the live numbers
@@ -69,6 +72,10 @@ BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - s
                     note="Option C+ and A/C/D, 15% of the account in each trade. Real-price backtest: Rs 1L to Rs 4.5L in 25 months, 12 of 26 months at +8% or more, worst month -26%, lost 9% in 2025. Most of the gain came in 2026."),
     "core": dict(month=3.5, period="Mar 2019 - Oct 2026, real NSE prices (median month +2.6%)", dd=-42,
                  note="The recommended book: Option C+ + the 20-day trade (L1) + the put spread after a dip (Q), 20% of the account per swing trade, Q 1 lot per Rs 1L. Backtest: Rs 1L to Rs 23.1L, 69% of months up, never more than 2 losing months in a row, worst month -36% (Mar 2020)."),
+    "p2ac": dict(month=3.8, period="Mar 2019 - Oct 2026 (P2 on real NSE prices; A/C real option prices from Oct 2024 only)", dd=-24,
+                 note="P2 on weekly call spreads at 20% of the account + A and C (no D), 1 lot per Rs 1L. Independent check: Rs 1L to Rs 32.1L (57%/yr), worst fall -24%, 2024 -4%. Out-of-sample: P2 held up on unseen data; A/C did not pass on foreign markets - this account is the live test."),
+    "p12ac": dict(month=None, period="not backtested as one book", dd=None,
+                  note="P1 and P2 on weekly call spreads at 20% of the account + A and C (no D), 1 lot per Rs 1L. Each part was tested on its own; the combination was not. Compare it with P2 + A + C to see whether P1 adds anything."),
 }
 RULE_NAME = {"P1": "Pullback in a strong trend", "P2": "Bounce in a correction", "P3": "Turn of the month",
              "L1": "20-day trade: dip in a hot market", "Q": "Put spread after a dip",
@@ -131,8 +138,9 @@ def _err(where, e):
 
 def _fill_log(it, stage, quotes, px, spot):
     try:
+        qty = max([p_["qty"] for p_ in it["pos"].values()] or [0])
         legs = [dict(strike=l.get("strike"), typ=l.get("typ"), expiry=l.get("expiry"), side=l.get("side"), bid=_r((q or {}).get("bid")), ask=_r((q or {}).get("ask")),
-                     ltp=_r((q or {}).get("ltp")), px=_r(p)) for l, q, p in zip(it["legs"], quotes, px)]
+                     ltp=_r((q or {}).get("ltp")), px=_r(p), bidq=(q or {}).get("bidq"), askq=(q or {}).get("askq"), qty=qty) for l, q, p in zip(it["legs"], quotes, px)]
         _append(_p("swing_fills.csv"), FILL_COLS, dict(t=_ts(), intent=it["id"], kind=it["kind"], rule=it["rule"], stage=stage, spot=_r(spot),
                                                          unit_pts=it["unit_pts"] if stage == "entry" else it.get("exit_value"), legs=json.dumps(legs)))
     except Exception as e: _err("fill log", e)
@@ -395,7 +403,8 @@ def _leg(rows, typ, strike):
         if best is None or dist < best[0]: best = (dist, float(x["strike_price"]), o)
     if best is None or best[0] > 60: raise RuntimeError(f"no {typ} near {strike}")
     md = best[2].get("market_data") or {}
-    return dict(key=best[2]["instrument_key"], strike=best[1], typ=typ, bid=_f(md.get("bid_price")), ask=_f(md.get("ask_price")), ltp=_f(md.get("ltp")))
+    return dict(key=best[2]["instrument_key"], strike=best[1], typ=typ, bid=_f(md.get("bid_price")), ask=_f(md.get("ask_price")), ltp=_f(md.get("ltp")),
+                bidq=_f(md.get("bid_qty")), askq=_f(md.get("ask_qty")))
 
 def _buy_px(q):
     a = _f(q.get("ask")); return a if a and a > 0 else (_f(q.get("ltp")) or 0) + 0.5
@@ -421,7 +430,7 @@ def _live_legs(it):
             if ex not in rows: rows[ex] = _chain(ex)
         for i, l in enumerate(it["legs"]):
             if out[i] is None:
-                x = _leg(rows[l["expiry"]], l["typ"], l["strike"]); out[i] = dict(bid=x["bid"], ask=x["ask"], ltp=x["ltp"])
+                x = _leg(rows[l["expiry"]], l["typ"], l["strike"]); out[i] = dict(bid=x["bid"], ask=x["ask"], ltp=x["ltp"], bidq=x["bidq"], askq=x["askq"])
     return out
 
 
@@ -453,14 +462,14 @@ def _open_swing(rule, exit_due, why):
     due = date.fromisoformat(exit_due); W = CFG["spread_pts"]
     k1, k2 = round((spot - W) / 50) * 50, round((spot + W) / 50) * 50
     structs = [("M", _monthly_after(due + timedelta(days=7)), ["L1"] if rule == "L1" else ["SW_M", "SW_CP"] if rule == "P3" else ["SW_M"])]
-    if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP"]))
+    if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP", "P12W"] + (["P2W"] if rule == "P2" else [])))
     for st, ex, tags in structs:
         try:
             if ex is None: raise RuntimeError("no suitable expiry in the instrument list")
             rows = _chain(ex); L, Sh = _leg(rows, "CE", k1), _leg(rows, "CE", k2)
             debit = _buy_px(L) - _sell_px(Sh)
             if debit <= 0: raise RuntimeError(f"bad spread price {debit}")
-            accts = [a for t in tags for a in _accts_for(t)]
+            accts = list(dict.fromkeys(a for t in tags for a in _accts_for(t)))
             _open_intent(kind="swing", rule=rule, struct=st, legs=[dict(L, side=1, expiry=str(ex), px=_buy_px(L)), dict(Sh, side=-1, expiry=str(ex), px=_sell_px(Sh))],
                          unit_pts=debit, accts=accts, spot=spot, exit_due=exit_due, why=why, extra=dict(stop_spot=None) if rule == "L1" else None,
                          label=f"{ex:%d %b} {L['strike']:.0f}/{Sh['strike']:.0f} CE spread ({'monthly' if st == 'M' else 'weekly'})")
@@ -499,7 +508,7 @@ def _open_intent(kind, rule, struct, legs, unit_pts, accts, spot, label, why, ex
                 lots = max(int(eq * fr // unit), 1 if unit <= mx * eq else 0); lots = min(lots, int(A["cash"] // blk1), 200)
                 blocked = lots * blk1
             else:
-                lots = max(int(eq * sz["acd_frac"] // unit), 1 if unit <= sz["acd_max"] * eq else 0) if sz else max(1, int(eq // CFG["acd_per_lot"]))
+                lots = max(int(eq * sz["acd_frac"] // unit), 1 if unit <= sz["acd_max"] * eq else 0) if sz and "acd_frac" in sz else max(1, int(eq // (sz or {}).get("acd_per_lot", CFG["acd_per_lot"])))
                 lots = min(lots, int(A["cash"] // unit), 200); blocked = lots * unit
             if lots < 1: it["skipped"][a] = "not enough free money"; continue
             qty = lots * lot
@@ -574,7 +583,7 @@ def _acd_day_setup():
         prev_close = rows[-1][4]; rng = [r[2] - r[3] for r in rows[-7:]]; src = "daily candles (1-minute history missing)"
     r30 = [v[0] for _, v in d1 if v[0] is not None][-20:]
     return dict(day=today, prev_close=prev_close, prev_nr7=bool(rng[-1] <= min(rng) + 1e-9), r30_hist=r30, c_checked=[], fired=None, src=src,
-                status="waiting for 09:15", A=None, C=None, D=None, done=False)
+                status="waiting for 09:15", A=None, C=None, D=None, done=False, ac_pending=False, fired_ac=None)
 
 def _acd_step(nw):
     """Run once a second in market hours: find the first A/C/D signal of the day, enter, and manage the exit."""
@@ -611,6 +620,7 @@ def _acd_step(nw):
             start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=IST) + timedelta(minutes=9 * 60 + 15 + k + 1)
             late = (nw - start).total_seconds()
             A["fired"] = dict(rule=name, k=k, side=s, at=f"{start:%H:%M}")
+            if name == "D": A["ac_pending"] = True          # the A+C-only accounts skip D and can still take a later C breakout
             if late > CFG["acd_late_s"]: A["status"] = f"{name} fired at {start:%H:%M} but the app saw it {late:.0f}s late: skipped"; A["done"] = True
             else:
                 atr = _atr5(bars, k + 1)
@@ -619,8 +629,24 @@ def _acd_step(nw):
         elif kd >= 60 and not (A["prev_nr7"] and A["C"] is None and kd < 370):
             A["status"] = "no A/C/D signal today"
         else: A["status"] = "watching"
+    _ac_only_step(A, bars, kd, nw)
 
-def _acd_open(rule, k, side, atr):
+def _ac_only_step(A, bars, kd, nw):
+    """After D took the day: keep watching for C for the accounts that trade A and C but not D (same C rule as above)."""
+    if not A.get("ac_pending") or A.get("fired_ac") is not None or A["C"] is not None or not A["prev_nr7"] or kd < 19: return
+    hi, lo = max(b[1] for b in bars[:15]), min(b[2] for b in bars[:15])
+    for k in range(19, kd + 1, 5):
+        if k in A["c_checked"]: continue
+        A["c_checked"].append(k); s = 1 if bars[k][3] > hi else -1 if bars[k][3] < lo else 0
+        if not s: continue
+        A["C"] = dict(k=k, side=s, hi=hi, lo=lo)
+        start = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=IST) + timedelta(minutes=9 * 60 + 15 + k + 1)
+        late = (nw - start).total_seconds(); A["fired_ac"] = dict(rule="C", k=k, side=s, at=f"{start:%H:%M}")
+        if late > CFG["acd_late_s"]: A["ac_pending"] = False
+        else: JOBS.put(("acd_open", dict(rule="C", k=k, side=s, atr=_atr5(bars, k + 1), ac_only=True)))
+        break
+
+def _acd_open(rule, k, side, atr, ac_only=False):
     spot = _spot()
     if not spot: raise RuntimeError("no fresh Nifty price")
     ex = _any_after(date.today())
@@ -631,10 +657,13 @@ def _acd_open(rule, k, side, atr):
     a = atr if atr else spot * 0.0011
     extra = dict(exit_rule="HOLD60" if rule == "D" else "EOD_TRAIL", e_spot=spot, trail=2 * a, stop_lvl=-2 * a, best=0.0,
                  hold_until=(_now() + timedelta(minutes=60)).strftime("%H:%M:%S"))
-    _open_intent(kind="acd", rule=rule, struct="ITM", legs=[dict(L, side=1, expiry=str(ex), px=px)], unit_pts=px, accts=_accts_for("ACD"), spot=spot,
+    accts = _accts_for("AC") if ac_only else list(dict.fromkeys(_accts_for("ACD") + (_accts_for("AC") if rule in ("A", "C") else [])))
+    _open_intent(kind="acd", rule=rule, struct="ITM", legs=[dict(L, side=1, expiry=str(ex), px=px)], unit_pts=px, accts=accts, spot=spot,
                  label=f"{ex:%d %b} {L['strike']:.0f} {typ} ({'call' if side > 0 else 'put'}, ~{CFG['acd_itm']} in the money)", why=RULE_NAME[rule], side=side, extra=extra)
     with LOCK:
-        if S.get("acd"): S["acd"]["done"] = True
+        if S.get("acd"):
+            if ac_only: S["acd"]["ac_pending"] = False
+            else: S["acd"]["done"] = True
 
 
 # ----------------------------------------------------------------------------- the loops
@@ -784,6 +813,34 @@ def _acct_view(a, all_trades):
                 month_ret=ms[-1]["ret"] if ms else None, today=round(sum(float(t["net"] or 0) for t in td)), today_n=len(td),
                 hist=hist[-800:], months=ms[-36:], trades=list(reversed(trades[-150:])), open=opens, backtest=BACKTEST[a])
 
+ASSUMED = {"swing": 1.5, "credit": 1.5, "acd": 0.5}      # slippage per leg per side the research assumed (points)
+REAL_COLS = ["t", "intent", "stage", "leg", "real_px", "paper_px", "note"]
+
+def _fill_quality():
+    """How the paper fills compare with what the research assumed, and with your own real fills when you log them."""
+    rows = _read(_p("swing_fills.csv")); out = {}
+    for r in rows:
+        try: legs = json.loads(r["legs"])
+        except Exception: continue
+        k = r["kind"]; d = out.setdefault(k, dict(kind=k, fills=0, legs=0, half_spread=0.0, paid_vs_mid=0.0, too_big=0, sized=0))
+        d["fills"] += 1
+        for l in legs:
+            b, a, px = _f(l.get("bid")), _f(l.get("ask")), _f(l.get("px"))
+            if not (b and a and px) or a < b: continue
+            mid = (a + b) / 2; buying = (l.get("side", 1) > 0) == (r["stage"] == "entry")
+            d["legs"] += 1; d["half_spread"] += (a - b) / 2; d["paid_vs_mid"] += (px - mid) if buying else (mid - px)
+            shown = _f(l.get("askq") if buying else l.get("bidq")); q = _f(l.get("qty"))
+            if shown and q: d["sized"] += 1; d["too_big"] += q > shown
+    res = []
+    for k, d in out.items():
+        n = d["legs"] or 1
+        res.append(dict(kind=k, fills=d["fills"], legs=d["legs"], half_spread=_r(d["half_spread"] / n), paid_vs_mid=_r(d["paid_vs_mid"] / n),
+                        assumed=ASSUMED.get(k), too_big_pct=round(d["too_big"] / d["sized"] * 100) if d["sized"] else None))
+    real = _read(_p("swing_realfills.csv")); diffs = [(_f(x["real_px"]) or 0) - (_f(x["paper_px"]) or 0) for x in real if _f(x.get("paper_px"))]
+    sgn = [(1 if x["note"] == "buy" else -1) for x in real if _f(x.get("paper_px"))]
+    worse = [dd * s_ for dd, s_ in zip(diffs, sgn)]
+    return dict(by_kind=sorted(res, key=lambda x: x["kind"]), real=dict(n=len(worse), avg_worse=_r(sum(worse) / len(worse)) if worse else None), real_rows=real[-30:])
+
 def _mix_view(V):
     """X% Core + (100-X)% 8% target, both scaled from the day Core started (never rebalanced). Changing X redraws the whole history with the new split."""
     c, t = V["core"], V["target8"]; ref = (S.get("mix_ref") or {}).get("t8") or CFG["start_cash"]; start = CFG["start_cash"]
@@ -818,8 +875,10 @@ def snapshot():
         views = [_acct_view(a, tr) for a, _, _ in ACCTS]
         try: views.append(_mix_view({v["id"]: v for v in views}))
         except Exception as e: _err("split view", e)
-        return dict(ready=True, enabled=S["enabled"], created=S["created"], cfg=CFG, accts=views, q_per_lot=Q_PER_LOT,
-                    plan=S.get("plan"), preview=S.get("preview"), acd=dict((k, acd.get(k)) for k in ("day", "status", "gap", "prev_nr7", "A", "C", "D", "fired", "done", "prev_close", "src")) if acd else None,
+        try: fq = _fill_quality()
+        except Exception as e: fq = None; _err("fill quality", e)
+        return dict(ready=True, enabled=S["enabled"], created=S["created"], cfg=CFG, accts=views, q_per_lot=Q_PER_LOT, fillq=fq,
+                    plan=S.get("plan"), preview=S.get("preview"), acd=dict((k, acd.get(k)) for k in ("day", "status", "gap", "prev_nr7", "A", "C", "D", "fired", "done", "prev_close", "src", "fired_ac")) if acd else None,
                     d1m_days=len(S["d1m"]), data=dict(daily_day=DATA["daily_day"], daily_last=DATA["daily"][-1][0] if DATA["daily"] else None, holidays_ok=DATA["hol_ok"]),
                     events=list(reversed(EVENTS[-60:])), err=S.get("last_err"), now=_ts(), lot=g("LOT"))
 
@@ -827,6 +886,15 @@ def _command(j):
     cmd = j.get("cmd")
     with LOCK:
         if cmd == "enable": S["enabled"] = bool(j.get("on")); _save(); _event("auto-trading " + ("ON" if S["enabled"] else "PAUSED")); return True, ""
+        if cmd == "realfill":                # you traded this for real: log your actual price next to the paper one
+            fl = [r for r in _read(_p("swing_fills.csv")) if r["intent"] == j.get("intent") and r["stage"] == j.get("stage")]
+            if not fl: return False, "no paper fill for that trade and stage"
+            try: legs = json.loads(fl[-1]["legs"]); i = int(j.get("leg", 0)); px = float(j.get("price"))
+            except Exception: return False, "need intent, stage (entry/exit), leg number and price"
+            if not 0 <= i < len(legs): return False, "no such leg"
+            buying = (legs[i].get("side", 1) > 0) == (j.get("stage") == "entry")
+            _append(_p("swing_realfills.csv"), REAL_COLS, dict(t=_ts(), intent=j["intent"], stage=j["stage"], leg=i, real_px=px, paper_px=legs[i].get("px"), note="buy" if buying else "sell"))
+            return True, ""
         if cmd == "mix":
             try: w = int(j.get("core"))
             except Exception: return False, "split must be a number"
@@ -839,7 +907,7 @@ def _command(j):
         if cmd == "reset":
             if S["intents"]: return False, "close the open trades first"
             stamp = _now().strftime("%Y%m%d_%H%M%S"); arch = _p(f"archive_{stamp}"); os.makedirs(arch, exist_ok=True)
-            for f in ("swing_state.json", "swing_trades.csv", "swing_equity.csv", "swing_events.log", "swing_fills.csv", "swing_signals.csv"):
+            for f in ("swing_state.json", "swing_trades.csv", "swing_equity.csv", "swing_events.log", "swing_fills.csv", "swing_signals.csv", "swing_realfills.csv"):
                 if os.path.exists(_p(f)): shutil.move(_p(f), os.path.join(arch, f))
             d1m, me_ = S["d1m"], S.get("mexp_seen", []); S.clear(); S.update(_new_state()); S["d1m"] = d1m; S["mexp_seen"] = me_; _save(); _event("fresh accounts started (old data archived)"); return True, ""
     return False, "unknown command"
@@ -856,7 +924,7 @@ def register_routes(app):
         return jsonify(ok=True) if ok else (jsonify(ok=False, error=msg), 400)
     @app.route("/api/swing/<name>.csv", endpoint="swing_csv")
     def _csv(name):
-        f = {"trades": "swing_trades.csv", "equity": "swing_equity.csv", "fills": "swing_fills.csv", "signals": "swing_signals.csv"}.get(name)
+        f = {"trades": "swing_trades.csv", "equity": "swing_equity.csv", "fills": "swing_fills.csv", "signals": "swing_signals.csv", "realfills": "swing_realfills.csv"}.get(name)
         if not f: return Response("not found", 404)
         data = open(_p(f), "rb").read() if READY and os.path.exists(_p(f)) else b""
         return Response(data, mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={f}"})

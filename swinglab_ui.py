@@ -36,7 +36,7 @@ PAGE = '<div class="page" id="vSwing"><div id="swHead"></div><div class="swtabs"
 JS = r"""
 /* ---------- Swing lab ---------- */
 let swSub=(()=>{try{return localStorage.getItem('swSub')||'overview';}catch(e){return 'overview';}})(), swLast=null;
-const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',mix:'#ffd54f'};
+const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',p2ac:'#f06292',p12ac:'#7986cb',mix:'#ffd54f'};
 const swInr=v=>{if(v==null||isNaN(v))return '–';const a=Math.abs(v),s=v<0?'−':'';return a>=1e7?s+'₹'+(a/1e7).toFixed(2)+' Cr':a>=1e5?s+'₹'+(a/1e5).toFixed(2)+' L':s+'₹'+Math.round(a).toLocaleString('en-IN');};
 const swSgn=v=>v==null||isNaN(v)?'–':(v>0?'+':'')+swInr(v).replace('−','−');
 const swPct=(v,d=1)=>v==null||isNaN(v)?'–':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(d)+'%';
@@ -99,14 +99,25 @@ function swAcdBox(d){
 function swOverview(d){
  let h='<div class="swbox"><h4>All accounts</h4>'+swChart(d.accts.map(a=>({name:a.name,color:SWC[a.id],pts:a.hist.map(x=>[x[0],x[2]]),base:a.start})),260)+'</div>';
  h+='<div class="swbox" style="margin-top:12px"><div class="tw"><table><tr><th>Account</th><th>Value now</th><th>Return</th><th>This month</th><th>Today</th><th>Open</th><th>Trades</th><th>Won</th><th>Worst fall</th><th>Backtest a month</th><th>Backtest worst fall</th></tr>'
-  +d.accts.map(a=>'<tr style="cursor:pointer" onclick="swGo(\''+a.id+'\')"><td><span class="mbar" style="width:10px;background:'+SWC[a.id]+'"></span> <b>'+swEsc(a.name)+'</b></td><td>'+swInr(a.mtm)+'</td><td class="'+swC(a.ret)+'">'+swPct(a.ret)+'</td><td class="'+swC(a.month_ret)+'">'+swPct(a.month_ret)+'</td><td class="'+swC(a.today)+'">'+swSgn(a.today)+'</td><td>'+a.open.length+'</td><td>'+a.n+'</td><td>'+(a.win_rate==null?'–':a.win_rate+'%')+'</td><td class="dn">'+swPct(a.maxdd)+'</td><td>+'+a.backtest.month+'%</td><td>'+a.backtest.dd+'%</td></tr>').join('')+'</table></div>'
+  +d.accts.map(a=>'<tr style="cursor:pointer" onclick="swGo(\''+a.id+'\')"><td><span class="mbar" style="width:10px;background:'+SWC[a.id]+'"></span> <b>'+swEsc(a.name)+'</b></td><td>'+swInr(a.mtm)+'</td><td class="'+swC(a.ret)+'">'+swPct(a.ret)+'</td><td class="'+swC(a.month_ret)+'">'+swPct(a.month_ret)+'</td><td class="'+swC(a.today)+'">'+swSgn(a.today)+'</td><td>'+a.open.length+'</td><td>'+a.n+'</td><td>'+(a.win_rate==null?'–':a.win_rate+'%')+'</td><td class="dn">'+swPct(a.maxdd)+'</td><td>'+(a.backtest.month==null?'–':'+'+a.backtest.month+'%')+'</td><td>'+(a.backtest.dd==null?'–':a.backtest.dd+'%')+'</td></tr>').join('')+'</table></div>'
   +'<div class="swnote" style="margin-top:6px">Backtest figures are from the research and are not a promise. Click a row to open that account.</div></div>';
  h+='<div class="swgrid">'+swPlanBox(d)+swAcdBox(d)+'</div>';
+ h+=swFillBox(d);
  h+=swRules(d);
  h+='<div class="swbox"><h4>What the lab did</h4>'+(d.events.length?d.events.map(e=>'<div class="ev '+e.kind+'">'+swEsc(e.t.slice(5,16))+' · '+swEsc(e.msg)+'</div>').join(''):'<div class="swnote">Nothing yet.</div>')+'</div>';
  h+='<p style="margin-top:12px"><a class="btn" href="/api/swing/trades.csv" download>Download trades.csv</a> <a class="btn" href="/api/swing/equity.csv" download>Download equity.csv</a> <a class="btn" href="/api/swing/fills.csv" download>fills.csv</a> <a class="btn" href="/api/swing/signals.csv" download>signals.csv</a> <button class="red" onclick="if(confirm(\'Archive all Swing lab data and restart all accounts?\'))swCmd({cmd:\'reset\'})">Reset all accounts</button></p>';
  if(d.err)h+='<p style="color:#ef5350">Last error: '+swEsc(d.err)+'</p>';
  return h;}
+
+function swFillBox(d){
+ const f=d.fillq; if(!f)return '';
+ const nm={swing:'Swing spreads (C, C+, L1)',credit:'Put spread (Q)',acd:'A/C/D intraday'};
+ let h='<div class="swbox" style="margin-bottom:12px"><h4>Fill quality</h4><div class="swnote">Every paper fill is taken at the live ask (buying) or bid (selling). Here is what that cost per leg, against what the research assumed. "Bigger than shown" = our quantity was larger than the size on offer at that price, so a real order would have filled worse.</div>';
+ h+=f.by_kind.length?'<div class="tw"><table><tr><th>Trades</th><th>Fills</th><th>Legs</th><th>Half the bid-ask gap</th><th>Paid vs mid-price</th><th>Research assumed</th><th>Bigger than shown</th></tr>'
+  +f.by_kind.map(x=>'<tr><td style="text-align:left">'+swEsc(nm[x.kind]||x.kind)+'</td><td>'+x.fills+'</td><td>'+x.legs+'</td><td>'+(x.half_spread==null?'–':x.half_spread+' pts')+'</td><td class="'+(x.paid_vs_mid!=null&&x.assumed!=null&&x.paid_vs_mid>x.assumed?'dn':'up')+'"><b>'+(x.paid_vs_mid==null?'–':x.paid_vs_mid+' pts')+'</b></td><td>'+(x.assumed==null?'–':x.assumed+' pts')+'</td><td>'+(x.too_big_pct==null?'–':x.too_big_pct+'%')+'</td></tr>').join('')+'</table></div>':'<div class="swnote">No fills yet.</div>';
+ h+='<div class="swnote" style="margin-top:8px"><b>Your real fills</b>: '+(f.real.n?f.real.n+' logged; on average your real price was <b>'+f.real.avg_worse+' pts '+(f.real.avg_worse>0?'worse':'better')+'</b> than the paper fill.':'none logged yet.')+' When you trade a signal for real, log your price:</div>'
+  +'<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"><input id="rfI" placeholder="trade id (e.g. S20261106-001)" style="width:190px"><select id="rfS"><option value="entry">entry</option><option value="exit">exit</option></select><input id="rfL" type="number" min="0" value="0" title="leg number (0 = first leg)" style="width:60px"><input id="rfP" type="number" step="0.05" placeholder="your price" style="width:110px"><button onclick="swCmd({cmd:\'realfill\',intent:document.getElementById(\'rfI\').value.trim(),stage:document.getElementById(\'rfS\').value,leg:+document.getElementById(\'rfL\').value,price:+document.getElementById(\'rfP\').value})">Log real fill</button> <a class="btn" href="/api/swing/realfills.csv" download>realfills.csv</a></div>';
+ return h+'</div>';}
 
 function swRules(d){const c=d.cfg;
  return '<details class="swbox" style="margin-bottom:12px"><summary style="cursor:pointer"><b>The rules (frozen from the research)</b></summary><div class="swnote" style="margin-top:8px">'
@@ -120,7 +131,7 @@ function swRules(d){const c=d.cfg;
  +'<p>Fills: buys at the ask, sells at the bid, broker charges deducted. Idle cash earns '+Math.round(c.liquid_rate*100)+'% a year like a liquid fund (shown separately).</p></div></details>';}
 
 function swAcct(d,a){
- const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd')||k==='target8'||k==='mix';
+ const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd')||k==='target8'||k==='mix'||k==='p2ac'||k==='p12ac';
  let h='<div class="cards">'
   +card('<span class="mbar" style="width:9px;background:'+SWC[k]+'"></span> Account value',swInr(a.mtm),'started with '+swInr(a.start)+(a.unreal?' · open trades '+swSgn(a.unreal):''))
   +card('Return','<span class="'+swC(a.ret)+'">'+swPct(a.ret,2)+'</span>','this month '+swPct(a.month_ret))
@@ -129,7 +140,7 @@ function swAcct(d,a){
   +card('Closed trades',a.n,(a.win_rate==null?'–':a.win_rate+'% won')+' · profit factor '+(a.pf==null?'–':a.pf))
   +card('Realised P&L','<span class="'+swC(a.realized)+'">'+swSgn(a.realized)+'</span>','after '+swInr(a.fees)+' charges')
   +card('Worst fall','<span class="dn">'+swPct(a.maxdd)+'</span>','from the highest value so far')
-  +card('Backtest','+'+bt.month+'% a month',swEsc(bt.period)+' · worst fall '+bt.dd+'%')+'</div>';
+  +card('Backtest',bt.month==null?'not tested yet':'+'+bt.month+'% a month',swEsc(bt.period)+(bt.dd==null?'':' · worst fall '+bt.dd+'%'))+'</div>';
  if(a.virtual)h+=swMixBox(a);
  h+='<div class="swbox" style="margin-top:12px"><h4>Account value</h4>'+swChart([{name:a.name,color:SWC[k],pts:a.hist.map(x=>[x[0],x[2]]),base:a.start}],230)+'<div class="swnote">'+swEsc(bt.note)+'</div></div>';
  h+='<div class="swbox" style="margin-top:12px"><h4>Open trades ('+a.open.length+')</h4>'+(a.open.length?a.open.map(p=>swPos(p)).join(''):'<div class="swnote">None. '+(swing?'Swing trades open at 09:16 on signal days. ':'')+(acd?'A/C/D trades open between 09:35 and the afternoon when a rule fires.':'')+'</div>')+'</div>';
@@ -138,7 +149,7 @@ function swAcct(d,a){
  h+='<div class="swbox"><h4>Month by month</h4>'+(a.months.length?'<div class="tw"><table><tr><th>Month</th><th>Trades</th><th>Won</th><th>Closed P&L</th><th>Value at month end</th><th>Return</th><th></th></tr>'
   +a.months.slice().reverse().map(m=>'<tr><td>'+m.month+'</td><td>'+m.trades+'</td><td>'+m.wins+'</td><td class="'+swC(m.pnl)+'">'+swSgn(m.pnl)+'</td><td>'+swInr(m.end)+'</td><td class="'+swC(m.ret)+'"><b>'+swPct(m.ret)+'</b></td><td style="text-align:left;width:120px"><span class="mbar" style="width:'+Math.round(Math.abs(m.ret||0)/mx*110)+'px;background:'+((m.ret||0)>=0?'#26a69a':'#ef5350')+'"></span></td></tr>').join('')+'</table></div>':'<div class="swnote">The first month appears after the first trading day.</div>')+'</div>';
  h+='<div class="swbox" style="margin-top:12px"><h4>Trades (latest first)</h4>'+(a.trades.length?'<div class="tw"><table><tr><th>Closed</th><th>Signal</th><th>What</th><th>Lots</th><th>Paid</th><th>Got</th><th>Nifty in → out</th><th>Why it closed</th><th>Charges</th><th>Net P&L</th></tr>'
-  +a.trades.map(t=>'<tr><td>'+swEsc(t.exit_time.slice(5,16))+'</td><td><b>'+swEsc(t.rule)+'</b></td><td style="text-align:left">'+swEsc(t.label)+'</td><td>'+t.lots+'</td><td>'+(+t.entry_pts).toFixed(2)+'</td><td>'+(+t.exit_pts).toFixed(2)+'</td><td>'+Math.round(+t.entry_spot)+' → '+Math.round(+t.exit_spot)+'</td><td style="text-align:left">'+swEsc(t.reason)+'</td><td>'+swInr(+t.fees)+'</td><td class="'+swC(+t.net)+'"><b>'+swSgn(+t.net)+'</b></td></tr>').join('')+'</table></div>':'<div class="swnote">No closed trades yet.</div>')+'</div>';
+  +a.trades.map(t=>'<tr><td>'+swEsc(t.exit_time.slice(5,16))+'<div class="swnote">'+swEsc(t.intent)+'</div></td><td><b>'+swEsc(t.rule)+'</b></td><td style="text-align:left">'+swEsc(t.label)+'</td><td>'+t.lots+'</td><td>'+(+t.entry_pts).toFixed(2)+'</td><td>'+(+t.exit_pts).toFixed(2)+'</td><td>'+Math.round(+t.entry_spot)+' → '+Math.round(+t.exit_spot)+'</td><td style="text-align:left">'+swEsc(t.reason)+'</td><td>'+swInr(+t.fees)+'</td><td class="'+swC(+t.net)+'"><b>'+swSgn(+t.net)+'</b></td></tr>').join('')+'</table></div>':'<div class="swnote">No closed trades yet.</div>')+'</div>';
  h+='<div style="margin-top:12px">'+swRules(d)+'</div>';
  return h;}
 
@@ -153,7 +164,7 @@ function swMixBox(a){
  return h;}
 
 function swPos(p){
- let h='<div class="pos"><div class="swtop"><div><b>'+swEsc(p.rule)+'</b> '+swEsc(p.rule_name)+' · '+swEsc(p.label)+' · '+p.lots+' lot ('+p.qty+')</div><div class="'+swC(p.unreal)+'" style="font-size:16px;font-weight:600">'+(p.unreal==null?'<span class="swnote">waiting for prices</span>':swSgn(p.unreal))+'</div></div>'
+ let h='<div class="pos"><div class="swtop"><div><b>'+swEsc(p.rule)+'</b> '+swEsc(p.rule_name)+' · '+swEsc(p.label)+' · '+p.lots+' lot ('+p.qty+') <span class="swnote">· id '+swEsc(p.id)+'</span></div><div class="'+swC(p.unreal)+'" style="font-size:16px;font-weight:600">'+(p.unreal==null?'<span class="swnote">waiting for prices</span>':swSgn(p.unreal))+'</div></div>'
   +'<div class="swnote">Bought '+swEsc(p.t_in.slice(5,16))+' at '+(+p.entry).toFixed(2)+' pts · now '+(p.now==null?'–':(+p.now).toFixed(2))+' · money tied up '+swInr(p.blocked)+(p.status!=='OPEN'?' · <b>closing…</b>':'')+'</div>';
  if(p.kind==='swing'&&p.spot&&p.spot_in&&p.stop){
   const lo=p.stop,hi=p.spot_in*1.03,pct=Math.max(0,Math.min(1,(p.spot-lo)/(hi-lo))),pin=(p.spot_in-lo)/(hi-lo);
