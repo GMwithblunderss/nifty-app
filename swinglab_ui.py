@@ -36,7 +36,7 @@ PAGE = '<div class="page" id="vSwing"><div id="swHead"></div><div class="swtabs"
 JS = r"""
 /* ---------- Swing lab ---------- */
 let swSub=(()=>{try{return localStorage.getItem('swSub')||'overview';}catch(e){return 'overview';}})(), swLast=null;
-const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',p2ac:'#f06292',p12ac:'#7986cb',combo:'#ffa726',mix:'#ffd54f'};
+const SWC={acd:'#ffb74d',c:'#4f8ff7',cplus:'#26a69a',c_acd:'#ab47bc',cplus_acd:'#ef5350',target8:'#26c6da',core:'#9ccc65',trust:'#d4e157',freq:'#ff8a65',p2ac:'#f06292',p12ac:'#7986cb',combo:'#ffa726',mix:'#ffd54f'};
 const swInr=v=>{if(v==null||isNaN(v))return '–';const a=Math.abs(v),s=v<0?'−':'';return a>=1e7?s+'₹'+(a/1e7).toFixed(2)+' Cr':a>=1e5?s+'₹'+(a/1e5).toFixed(2)+' L':s+'₹'+Math.round(a).toLocaleString('en-IN');};
 const swSgn=v=>v==null||isNaN(v)?'–':(v>0?'+':'')+swInr(v).replace('−','−');
 const swPct=(v,d=1)=>v==null||isNaN(v)?'–':(v>0?'+':v<0?'−':'')+Math.abs(v).toFixed(d)+'%';
@@ -128,10 +128,11 @@ function swRules(d){const c=d.cfg;
  +'<p><b>Q, the put spread after a dip</b> (Core only): on the first trading day after each monthly expiry, if Nifty closed 5%+ below its 52-week high, sell the next monthly put ~6% below Nifty and buy the one ~9% below; held to expiry (closed at 15:15 on expiry day). 1 lot per '+swInr(d.q_per_lot||100000)+'; the full possible loss is set aside.</p>'
  +'<p><b>Core</b> = Option C+ + L1 + Q, 20% of the account per swing trade: the recommended book from the Nov 2026 report. <b>The split view</b> (default 70% Core + 30% 8% target) is not a separate account: it adds up X% of Core and the rest of the 8% target account from the day Core started. Change X on its page; the whole history is redrawn with the new split.</p>'
  +'<p><b>8% target</b> runs Option C+ and A/C/D together with 15% of the account in each trade (at least 1 lot while one lot is under 22.5% of it). Bigger bets: bigger months and deeper falls.</p>'
+ +'<p><b>TRUST</b> is Core without P3 (turn of the month): P1 and P2 weekly spreads + L1 + Q at 20% of the account. <b>Frequent</b> runs A/C/D plus the overnight call (buy a call about 1% in the money at 15:20 if Nifty is above its open, sell at the next 09:16), 1 lot per Rs 1 lakh. Both are paper tests of rules that passed the Monte Carlo / walk-forward / nudge tests; Frequent is not statistically proven (t = 1.5).</p>'
  +'<p>Fills: buys at the ask, sells at the bid, broker charges deducted. Idle cash earns '+Math.round(c.liquid_rate*100)+'% a year like a liquid fund (shown separately).</p></div></details>';}
 
 function swAcct(d,a){
- const k=a.id,bt=a.backtest,swing=k!=='acd',acd=k==='acd'||k.endsWith('_acd')||k==='target8'||k==='mix'||k==='p2ac'||k==='p12ac'||k==='combo';
+ const k=a.id,bt=a.backtest,swing=k!=='acd'&&k!=='freq',acd=k==='acd'||k==='freq'||k.endsWith('_acd')||k==='target8'||k==='mix'||k==='p2ac'||k==='p12ac'||k==='combo';
  let h='<div class="cards">'
   +card('<span class="mbar" style="width:9px;background:'+SWC[k]+'"></span> Account value',swInr(a.mtm),'started with '+swInr(a.start)+(a.unreal?' · open trades '+swSgn(a.unreal):''))
   +card('Return','<span class="'+swC(a.ret)+'">'+swPct(a.ret,2)+'</span>','this month '+swPct(a.month_ret))
@@ -171,6 +172,7 @@ function swPos(p){
   h+='<div class="bar"><div style="position:absolute;left:0;top:0;height:8px;width:'+(pct*100)+'%;border-radius:5px;background:'+(p.spot>=p.spot_in?'#26a69a':'#ef9a9a')+'"></div><div style="position:absolute;left:'+(pin*100)+'%;top:-3px;width:2px;height:14px;background:#c9d4e3"></div></div>'
    +'<div class="swnote">Nifty '+Math.round(p.spot).toLocaleString('en-IN')+' · entry '+Math.round(p.spot_in).toLocaleString('en-IN')+' · stop '+Math.round(p.stop).toLocaleString('en-IN')+' · planned exit at the open on <b>'+swEsc(p.exit_due)+'</b></div>';}
  if(p.kind==='credit')h+='<div class="swnote">Credit spread: collected '+(-p.entry).toFixed(2)+' pts a unit; held to the <b>'+swEsc(p.exit_due)+'</b> expiry, no stop. Money set aside = the most it can lose.</div>';
+ if(p.kind==='overnight')h+='<div class="swnote">Overnight call: bought at 15:20 because Nifty was above its open; sells at the next trading day\'s 09:16 open. No stop.</div>';
  if(p.kind==='acd')h+='<div class="swnote">'+(p.exit_rule==='HOLD60'?'Exits at '+swEsc(p.hold_until)+' (60 minutes)':'Trailing stop at '+(p.stop_lvl==null?'–':(p.stop_lvl>0?'+':'')+p.stop_lvl)+' pts from entry · best so far '+(p.best==null?'–':'+'+p.best)+' pts · otherwise exits at 15:20')+'</div>';
  h+='<button class="red" style="margin-top:8px;padding:4px 10px" onclick="if(confirm(\'Close this trade now in every account that holds it?\'))swCmd({cmd:\'close\',id:\''+p.id+'\'})">Close now</button></div>';
  return h;}

@@ -8,6 +8,8 @@ SWING LAB - five paper accounts that trade the researched strategies by themselv
   cplus      Option C+: like C, but P1 and P2 use a WEEKLY 300/300 spread (expiry at least 2 days after the exit).
   c_acd      Option C and A/C/D sharing one account.
   cplus_acd  Option C+ and A/C/D sharing one account.
+  trust      TRUST: Core without P3 = P1 + P2 weekly spreads + L1 + Q, 20% of the account per swing trade (P3 had no edge in the tests).
+  freq       Frequent: A/C/D intraday + the overnight call (15:20 buy a call ~1% in the money if Nifty is above its 09:15 open, sell at the next 09:16), 1 lot per Rs 1 lakh.
 
 Rules are frozen copies of the backtests in Desktop/Nifty-research (swing/*.py, obt/buy_signals.py, r6/cplus.py).
 Each account starts with CFG["start_cash"]. Its own files live in spread_data/swing/ (saved to the data repo like the rest).
@@ -49,6 +51,7 @@ CFG = dict(
 ACCTS = [("acd", "A/C/D", {"ACD"}), ("c", "Option C", {"SW_M"}), ("cplus", "Option C+", {"SW_CP"}),
          ("c_acd", "Option C + A/C/D", {"SW_M", "ACD"}), ("cplus_acd", "Option C+ + A/C/D", {"SW_CP", "ACD"}),
          ("target8", "8% target", {"SW_CP", "ACD"}), ("core", "Core: C+ + L1 + Q", {"SW_CP", "L1", "Q"}),
+         ("trust", "TRUST: Core without P3", {"TR_W", "L1", "Q"}), ("freq", "Frequent: A/C/D + overnight call", {"ACD", "ON"}),
          ("p2ac", "P2 + A + C", {"P2W", "AC"}), ("p12ac", "P1 + P2 + A + C", {"P12W", "AC"}),
          ("combo", "Combined: P1 + P2 ATM + L1 + Q + A + C", {"P1W", "P2ATM", "L1", "Q", "AC"})]   # weekly spreads only; A and C without D
 MIX_DEFAULT = 70   # % of the money that follows Core in the split view; the rest follows the 8% target account. Changeable on the page.
@@ -59,6 +62,7 @@ MIX_BT = {0: (453529, 6.2, 7.5, -26, -45, 17), 10: (425789, 6.0, 7.4, -24, -43, 
 # accounts that size differently from CFG: fraction of the account put into each trade's premium (at least 1 lot while one lot is under `max`)
 ACCT_SIZE = {"target8": dict(swing_frac=0.15, swing_max=0.225, acd_frac=0.15, acd_max=0.225),
              "core": dict(swing_frac=0.20, swing_max=0.30, acd_frac=0.20, acd_max=0.30),
+             "trust": dict(swing_frac=0.20, swing_max=0.30),                        # same sizing as Core; Q is 1 lot per Rs 1L as everywhere
              "p2ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0),      # as the independent check: P2 at 20%, A/C 1 lot per Rs 1L
              "p12ac": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0),
              "combo": dict(swing_frac=0.20, swing_max=0.30, acd_per_lot=100000.0)}
@@ -74,6 +78,10 @@ BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - s
                     note="Option C+ and A/C/D, 15% of the account in each trade. Real-price backtest: Rs 1L to Rs 4.5L in 25 months, 12 of 26 months at +8% or more, worst month -26%, lost 9% in 2025. Most of the gain came in 2026."),
     "core": dict(month=3.5, period="Mar 2019 - Oct 2026, real NSE prices (median month +2.6%)", dd=-42,
                  note="The recommended book: Option C+ + the 20-day trade (L1) + the put spread after a dip (Q), 20% of the account per swing trade, Q 1 lot per Rs 1L. Backtest: Rs 1L to Rs 23.1L, 69% of months up, never more than 2 losing months in a row, worst month -36% (Mar 2020)."),
+    "trust": dict(month=3.9, period="Mar 2019 - Oct 2026, real NSE prices (rebuilt from the verifier engine)", dd=-39,
+                  note="TRUST = Core with P3 (turn of the month) removed: P1 and P2 on weekly 300/300 call spreads + L1 (20-day monthly spread) + Q (put spread after a dip), 20% of the account per swing trade, Q 1 lot per Rs 1L. P3 had no edge (t = 0). Rebuilt backtest: about 61%/yr (Core with P3: 57%), worst fall -39% (Core: -51%). In-sample, so expect less live; planning range 35-50%/yr with 40-50% falls possible."),
+    "freq": dict(month=3.0, period="Sep 2024 - Oct 2026, real 1-minute option prices, 1 lot (as tested about +6%/month on Rs 1L, about +3% if the edge is half as good)", dd=-87,
+                 note="A/C/D (about 85 trades a year) + the overnight call (about 115 a year), 1 lot per Rs 1L, about 3.4 trades a week. 366 trades: +6.6 pts (Rs 429) a trade, t = 1.5 (not proven), win 46%. Worst historical drop Rs 87k = 87% of Rs 1L, so this account is thin at Rs 1L. The profit rests on a few big winners: without the best 5% of trades it loses. The overnight call fails if the timing slips a few minutes."),
     "p2ac": dict(month=3.8, period="Mar 2019 - Oct 2026 (P2 on real NSE prices; A/C real option prices from Oct 2024 only)", dd=-24,
                  note="P2 on weekly call spreads at 20% of the account + A and C (no D), 1 lot per Rs 1L. Independent check: Rs 1L to Rs 32.1L (57%/yr), worst fall -24%, 2024 -4%. Out-of-sample: P2 held up on unseen data; A/C did not pass on foreign markets - this account is the live test."),
     "combo": dict(month=3.0, period="Feb 2010 - Oct 2026, real NSE prices, lot caps applied (A/C real from Oct 2024)", dd=-47,
@@ -81,7 +89,7 @@ BACKTEST = {   # reference results from the research (Rs 1 lakh, compounded) - s
     "p12ac": dict(month=None, period="not backtested as one book", dd=None,
                   note="P1 and P2 on weekly call spreads at 20% of the account + A and C (no D), 1 lot per Rs 1L. Each part was tested on its own; the combination was not. Compare it with P2 + A + C to see whether P1 adds anything."),
 }
-RULE_NAME = {"P1": "Pullback in a strong trend", "P2": "Bounce in a correction", "P3": "Turn of the month",
+RULE_NAME = {"ON": "Overnight call after an up day", "P1": "Pullback in a strong trend", "P2": "Bounce in a correction", "P3": "Turn of the month",
              "L1": "20-day trade: dip in a hot market", "Q": "Put spread after a dip",
              "A": "A: gap + opening drive", "C": "C: breakout after an NR7 day", "D": "D: wild-open fade"}
 TRADE_COLS = ["acct", "intent", "rule", "kind", "struct", "label", "lots", "qty", "entry_time", "exit_time", "entry_spot", "exit_spot",
@@ -466,7 +474,7 @@ def _open_swing(rule, exit_due, why):
     due = date.fromisoformat(exit_due); W = CFG["spread_pts"]
     k1, k2 = round((spot - W) / 50) * 50, round((spot + W) / 50) * 50
     structs = [("M", _monthly_after(due + timedelta(days=7)), ["L1"] if rule == "L1" else ["SW_M", "SW_CP"] if rule == "P3" else ["SW_M"])]
-    if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP", "P12W"] + (["P2W"] if rule == "P2" else ["P1W"])))
+    if rule in ("P1", "P2"): structs.append(("W", _any_after(due + timedelta(days=2)), ["SW_CP", "P12W", "TR_W"] + (["P2W"] if rule == "P2" else ["P1W"])))
     if rule == "P2": structs.append(("WA", _any_after(due + timedelta(days=2)), ["P2ATM"]))     # P2 at the money / +600 (combined book)
     for st, ex, tags in structs:
         if not any(_accts_for(t) for t in tags): continue
@@ -482,6 +490,23 @@ def _open_swing(rule, exit_due, why):
                          unit_pts=debit, accts=accts, spot=spot, exit_due=exit_due, why=why, extra=dict(stop_spot=None) if rule == "L1" else None,
                          label=f"{ex:%d %b} {L['strike']:.0f}/{Sh['strike']:.0f} CE spread ({'monthly' if st == 'M' else 'weekly, at the money / +600' if st == 'WA' else 'weekly'})")
         except Exception as e: _err(f"open {rule} {st}", e)
+
+def _on_open():
+    """Overnight call: at 15:20, if Nifty is above its 09:15 open, buy a call about 1% in the money (nearest expiry still alive tomorrow)
+    and sell it at tomorrow's 09:16 open. Same rule as the research (192 real 1-minute trades, +5.8 pts a trade after 3 pts of costs)."""
+    if not _accts_for("ON"): return
+    spot = _spot(); bars = _today_bars()
+    if not spot or not bars: _event("overnight call: no fresh price or no candles at 15:20 - skipped", "warn"); return
+    day_open = bars[0][0]
+    if spot <= day_open: _event(f"overnight call: Nifty {spot:,.1f} is not above today's open {day_open:,.1f} - no trade today"); return
+    nxt = _next_trading(date.today()); ex = _any_after(nxt)
+    if ex is None: raise RuntimeError("overnight call: no expiry alive tomorrow in the instrument list")
+    strike = round(spot * 0.99 / 50) * 50
+    L = _leg(_chain(ex), "CE", strike); px = _buy_px(L)
+    if not px or px <= 0: raise RuntimeError(f"overnight call: bad price {px}")
+    _open_intent(kind="overnight", rule="ON", struct="ITM1", legs=[dict(L, side=1, expiry=str(ex), px=px)], unit_pts=px, accts=_accts_for("ON"), spot=spot,
+                 label=f"{ex:%d %b} {L['strike']:.0f} CE (call, ~1% in the money, held overnight)", why=f"Nifty {spot:,.1f} is above today's open {day_open:,.1f} at 15:20",
+                 exit_due=str(nxt), side=1, extra=dict(exit_rule="NEXT_OPEN"))
 
 def _open_q(exit_due, why):
     """Q: sell the monthly put ~6% below Nifty, buy the one ~9% below, hold to expiry."""
@@ -682,6 +707,7 @@ def _worker():
             if job == "open_swing": _open_swing(**arg)
             elif job == "close": _close_intent(**arg)
             elif job == "acd_open": _acd_open(**arg)
+            elif job == "on_open": _on_open()
             elif job == "data": _ensure_data()
         except Exception as e: _err(job, e)
 
@@ -708,6 +734,9 @@ def _exit_checks(nw):
             ts_ = str(date.today())
             if ts_ > it["exit_due"] or (ts_ == it["exit_due"] and hmv >= "15:15"):
                 JOBS.put(("close", dict(iid=it["id"], reason="expiry"))); it["status"] = "QUEUED"
+        elif it["kind"] == "overnight":
+            if str(date.today()) > it["day_in"] and hmv >= "09:16":
+                JOBS.put(("close", dict(iid=it["id"], reason="next-day open (09:16)"))); it["status"] = "QUEUED"
         else:
             if it["day_in"] != str(date.today()) or hmv >= "15:20":
                 JOBS.put(("close", dict(iid=it["id"], reason="15:20 close"))); it["status"] = "QUEUED"; continue
@@ -775,6 +804,8 @@ def _loop():
                                 if it["kind"] == "swing" and it["status"] == "OPEN" and it.get("exit_due", "9") <= ts:
                                     JOBS.put(("close", dict(iid=it["id"], reason="planned exit (late)"))); it["status"] = "QUEUED"
                         if mn < _hm("15:20"): _acd_step(nw)
+                        if _hm("15:20") <= mn < _hm("15:27") and S["done"].get("on") != ts and _spot():
+                            S["done"]["on"] = ts; JOBS.put(("on_open", {}))
                 if trading and mn >= _hm(CFG["eod_at"]) and S["done"].get("eod") != ts:
                     S["done"]["eod"] = ts; _eod(nw); _save()
                 if trading and mn >= _hm(CFG["preview_at"]) and DATA["daily"] and (not S.get("preview") or S["preview"].get("made", "")[:10] != ts):
@@ -821,7 +852,7 @@ def _acct_view(a, all_trades):
                 month_ret=ms[-1]["ret"] if ms else None, today=round(sum(float(t["net"] or 0) for t in td)), today_n=len(td),
                 hist=hist[-800:], months=ms[-36:], trades=list(reversed(trades[-150:])), open=opens, backtest=BACKTEST[a])
 
-ASSUMED = {"swing": 1.5, "credit": 1.5, "acd": 0.5}      # slippage per leg per side the research assumed (points)
+ASSUMED = {"swing": 1.5, "credit": 1.5, "acd": 0.5, "overnight": 1.5}      # slippage per leg per side the research assumed (points)
 REAL_COLS = ["t", "intent", "stage", "leg", "real_px", "paper_px", "note"]
 
 def _fill_quality():
