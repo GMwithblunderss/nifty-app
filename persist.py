@@ -19,7 +19,7 @@ REPO = os.environ.get("DATA_REPO", "").strip()
 TOKEN = os.environ.get("GH_TOKEN", "").strip()
 URL = os.environ.get("DATA_REPO_URL", "").strip() or (f"https://x-access-token:{TOKEN}@github.com/{REPO}.git" if REPO and TOKEN else "")
 CLONE = os.environ.get("DATA_CLONE_DIR", "/tmp/nifty_data_repo")
-PUSH_EVERY = int(os.environ.get("PUSH_EVERY_SEC", "600"))
+PUSH_EVERY = int(os.environ.get("PUSH_EVERY_SEC", "600"))   # each push re-sends the whole grown CSVs, so more often = bigger repo and more git work
 RESTART_AT = os.environ.get("DAILY_RESTART_IST", "08:30")
 MAX_FILE = 95 * 1024 * 1024            # GitHub rejects files over 100 MB
 ENABLED = bool(URL)
@@ -43,6 +43,14 @@ _TLOCK = threading.Lock()
 _TOFF = {}      # tick file name -> bytes already saved
 _TSTAMP = [0]   # last piece stamp used; always increases, so two pieces can never share a file name
 _ENV = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+# MEMORY: git runs as a separate process that the app's memory guard does not see. Pushing the big, growing signal CSVs
+# (tens of MB, re-sent on every change) made git delta-compress whole files: ~260 MB on top of the app -> Render's 512 MB kill.
+# These caps (no delta search on files > 1 MB, one thread, small pack windows) measured ~80 MB for the same push, same repo size.
+_GITCAP = {"core.bigFileThreshold": "1m", "pack.threads": "1", "pack.windowMemory": "16m", "pack.deltaCacheSize": "16m",
+           "core.packedGitLimit": "64m", "core.packedGitWindowSize": "16m"}
+_ENV["GIT_CONFIG_COUNT"] = str(len(_GITCAP))
+for _i, (_k, _v) in enumerate(_GITCAP.items()):
+    _ENV[f"GIT_CONFIG_KEY_{_i}"] = _k; _ENV[f"GIT_CONFIG_VALUE_{_i}"] = _v
 
 
 def _clean(s):

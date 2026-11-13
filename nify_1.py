@@ -518,18 +518,31 @@ def fetch_chain(expiry, side="PUT"):
     for c in ("strike", "spot", "ltp", "delta"): ch[c] = pd.to_numeric(ch[c], errors="coerce")
     return ch.sort_values("strike").reset_index(drop=True)
 
-def pick_legs(ch, side="PUT"):
-    g = lambda n: globals()[("CALL_" if side == "CALL" else "")+n]; spot = ch.spot.dropna().iloc[0]; up = side == "CALL"
+def pick_legs(ch, side="PUT", fallback=False):
+    """fallback=True (start-up only): if Upstox sends no prices/deltas yet (e.g. before 09:15), pick by strike distance instead of crashing."""
+    g = lambda n: globals()[("CALL_" if side == "CALL" else "")+n]; up = side == "CALL"
+    if ch is None or ch.empty or ch.spot.dropna().empty: raise RuntimeError("option chain came back empty")
+    spot = ch.spot.dropna().iloc[0]
+    _d = lambda r: (None if pd.isna(r.delta) else float(r.delta))
     if g("SHORT_MODE") == "atm": s_ = ch.iloc[(ch.strike-spot).abs().argsort().iloc[0]]
     else:
         c = ch[((ch.strike >= spot) if up else (ch.strike <= spot)) & (ch.ltp > 0)].dropna(subset=["delta"])
-        s_ = c.iloc[(c.delta.abs()-g("SHORT_DELTA")).abs().argsort().iloc[0]]
+        if c.empty:
+            if not fallback: raise RuntimeError(f"no {side} strikes with price and delta in the chain yet")
+            c = ch[(ch.strike >= spot) if up else (ch.strike <= spot)]
+            s_ = c.iloc[(c.strike-spot*(1.015 if up else 0.985)).abs().argsort().iloc[0]]   # ~1.5% OTM, roughly a 0.30-delta strike
+        else: s_ = c.iloc[(c.delta.abs()-g("SHORT_DELTA")).abs().argsort().iloc[0]]
     if g("HEDGE_MODE") == "delta":
         c = ch[((ch.strike > s_.strike) if up else (ch.strike < s_.strike)) & (ch.ltp > 0)].dropna(subset=["delta"])
-        l = c.iloc[(c.delta.abs()-g("HEDGE_DELTA")).abs().argsort().iloc[0]]
+        if c.empty:
+            if not fallback: raise RuntimeError(f"no {side} hedge strikes with price and delta in the chain yet")
+            c = ch[(ch.strike > s_.strike) if up else (ch.strike < s_.strike)]
+            if c.empty: raise RuntimeError("no strikes beyond the short strike")
+            l = c.iloc[(c.strike-(s_.strike+(1 if up else -1)*200)).abs().argsort().iloc[0]]
+        else: l = c.iloc[(c.delta.abs()-g("HEDGE_DELTA")).abs().argsort().iloc[0]]
     else: l = ch.iloc[(ch.strike-(s_.strike+(1 if up else -1)*g("HEDGE_POINTS"))).abs().argsort().iloc[0]]
-    return dict(side=side, short=dict(key=s_.key, strike=float(s_.strike), delta=float(s_.delta)),
-                long=dict(key=l.key, strike=float(l.strike), delta=float(l.delta)), spot=float(spot))
+    return dict(side=side, short=dict(key=s_.key, strike=float(s_.strike), delta=_d(s_)),
+                long=dict(key=l.key, strike=float(l.strike), delta=_d(l)), spot=float(spot))
 
 # ------------------------------------------------------------------ live feed
 def _f(x):
@@ -3062,8 +3075,16 @@ def main():
     today = str(now_ist().date())
     session = json.load(open(SESSION_PATH)) if os.path.exists(SESSION_PATH) else {}
     if session.get("date") != today: session = dict(date=today, realized=0.0, n=0)
+    if ON_CLOUD: persist.start_background(on_stop=ENGINE_STOP.set)   # started early: saves keep running even if a later start-up step fails
     EXPIRY0 = choose_expiry(); print("Expiry:", EXPIRY0)
-    plan0 = pick_legs(fetch_chain(EXPIRY0)); globals()["PLAN0"] = plan0
+    plan0 = None
+    for _try in range(6):          # Upstox can return a chain with no prices/deltas (pre-open, hiccups): retry instead of crashing
+        try: plan0 = pick_legs(fetch_chain(EXPIRY0)); break
+        except Exception as _e: print(f"Start-up option chain not usable ({_e}); retry {_try+1}/6 in 20 s", flush=True); time.sleep(20)
+    if plan0 is None:
+        plan0 = pick_legs(fetch_chain(EXPIRY0), fallback=True)
+        print("Start-up legs picked by strike distance (no deltas yet); the next entry re-picks them by delta.", flush=True)
+    globals()["PLAN0"] = plan0
     saved = json.load(open(STATE_PATH)) if os.path.exists(STATE_PATH) else None
     loaded = []
     if saved: loaded = saved.get("positions") if "positions" in saved else ([dict(saved, pid=1)] if saved.get("status") else [])
@@ -3087,7 +3108,6 @@ def main():
     t = threading.Thread(target=engine, daemon=True); t.start(); threading.Thread(target=tick_writer, daemon=True).start()
     threading.Thread(target=feed_watchdog, daemon=True).start()
     if USE_REST_FALLBACK: threading.Thread(target=rest_poller, daemon=True).start()
-    if ON_CLOUD: persist.start_background(on_stop=ENGINE_STOP.set)   # saves data every 10 min, on shutdown, and restarts the app daily at 08:30 IST
     threading.Thread(target=lambda: app.run(host=("0.0.0.0" if ON_CLOUD else "127.0.0.1"), port=PORT, threaded=True, use_reloader=False), daemon=True).start()
     url = f"http://127.0.0.1:{PORT}"; print(f"\nDashboard: {url}   (Ctrl+C here to stop; an open trade stays saved)\n")
     if not ON_CLOUD: time.sleep(1.5); webbrowser.open(url)
@@ -3872,4 +3892,9 @@ loadFull();poll();setInterval(poll,1000);setInterval(tailPoll,1000);
 </script></body></html>"""
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:   # crash or engine stop: save to the data repo before the process exits (Render then restarts it)
+        if ON_CLOUD:
+            try: ENGINE_STOP.set(); time.sleep(2); persist.push_now("exit"); persist.push_ticks("exit")
+            except Exception as _e: print("[persist] final save failed:", _e, flush=True)
